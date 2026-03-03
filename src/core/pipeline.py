@@ -289,6 +289,7 @@ class StockAnalysisPipeline:
 
             # Step 5: 获取分析上下文（技术面数据）
             context = self.db.get_analysis_context(code)
+            profile_context = self.db.get_portfolio_profile(code)
 
             if context is None:
                 logger.warning(f"{stock_name}({code}) 无法获取历史行情数据，将仅基于新闻和实时行情分析")
@@ -307,7 +308,8 @@ class StockAnalysisPipeline:
                 realtime_quote, 
                 chip_data, 
                 trend_result,
-                stock_name  # 传入股票名称
+                stock_name,  # 传入股票名称
+                profile_context
             )
             
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
@@ -352,7 +354,8 @@ class StockAnalysisPipeline:
         realtime_quote,
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
-        stock_name: str = ""
+        stock_name: str = "",
+        trader_profile: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         增强分析上下文
@@ -365,6 +368,7 @@ class StockAnalysisPipeline:
             chip_data: 筹码分布数据
             trend_result: 趋势分析结果
             stock_name: 股票名称
+            trader_profile: 交易档案（可选）
             
         Returns:
             增强后的上下文
@@ -423,6 +427,24 @@ class StockAnalysisPipeline:
                 'signal_score': trend_result.signal_score,
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
+            }
+
+        if trader_profile:
+            enhanced['trader_profile'] = {
+                'status': trader_profile.get('status'),
+                'is_favorite': trader_profile.get('is_favorite', False),
+                'buy_price': trader_profile.get('buy_price'),
+                'position_pct': trader_profile.get('position_pct'),
+                'shares': trader_profile.get('shares'),
+                'target_buy_price': trader_profile.get('target_buy_price'),
+                'target_sell_price': trader_profile.get('target_sell_price'),
+                'stop_loss_price': trader_profile.get('stop_loss_price'),
+                'notes': trader_profile.get('notes'),
+                'tags': trader_profile.get('tags') or [],
+            }
+            enhanced['trader_profile'] = {
+                k: v for k, v in enhanced['trader_profile'].items()
+                if v is not None and v != "" and v != []
             }
 
         # Issue #234: Override today with realtime OHLC + trend MA for intraday analysis
@@ -524,6 +546,9 @@ class StockAnalysisPipeline:
                 initial_context["realtime_quote"] = self._safe_to_dict(realtime_quote)
             if chip_data:
                 initial_context["chip_distribution"] = self._safe_to_dict(chip_data)
+            profile_context = self.db.get_portfolio_profile(code)
+            if profile_context:
+                initial_context["trader_profile"] = profile_context
 
             # 运行 Agent
             message = f"请分析股票 {code} ({stock_name})，并生成决策仪表盘报告。"

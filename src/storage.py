@@ -378,6 +378,69 @@ class ConversationMessage(Base):
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class PortfolioProfile(Base):
+    """
+    自选股交易档案
+
+    存储用户对单只股票的交易信息（持仓、买入价、仓位、关注状态等），
+    供 WebUI 管理并在 AI 分析时作为个性化上下文输入。
+    """
+    __tablename__ = 'portfolio_profiles'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(16), nullable=False, unique=True, index=True)
+    name = Column(String(50))
+
+    # holding/watch/candidate/archived
+    status = Column(String(16), nullable=False, default='watch', index=True)
+    is_favorite = Column(Boolean, nullable=False, default=False, index=True)
+
+    # 交易信息
+    buy_price = Column(Float)
+    position_pct = Column(Float)       # 仓位百分比（0~100）
+    shares = Column(Float)             # 持仓股数
+    target_buy_price = Column(Float)   # 计划入场价
+    target_sell_price = Column(Float)  # 计划止盈价
+    stop_loss_price = Column(Float)    # 计划止损价
+
+    tags_json = Column(Text)           # JSON string list
+    notes = Column(Text)
+
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, index=True)
+
+    __table_args__ = (
+        Index('ix_portfolio_status_favorite', 'status', 'is_favorite'),
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        tags: List[str] = []
+        if self.tags_json:
+            try:
+                parsed = json.loads(self.tags_json)
+                if isinstance(parsed, list):
+                    tags = [str(x).strip() for x in parsed if str(x).strip()]
+            except Exception:
+                tags = []
+        return {
+            "id": self.id,
+            "stock_code": self.code,
+            "stock_name": self.name,
+            "status": self.status,
+            "is_favorite": self.is_favorite,
+            "buy_price": self.buy_price,
+            "position_pct": self.position_pct,
+            "shares": self.shares,
+            "target_buy_price": self.target_buy_price,
+            "target_sell_price": self.target_sell_price,
+            "stop_loss_price": self.stop_loss_price,
+            "tags": tags,
+            "notes": self.notes,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式
@@ -438,7 +501,7 @@ class DatabaseManager:
     @classmethod
     def get_instance(cls) -> 'DatabaseManager':
         """获取单例实例"""
-        if cls._instance is None:
+        if cls._instance is None or not getattr(cls._instance, '_initialized', False):
             cls._instance = cls()
         return cls._instance
     
@@ -1447,6 +1510,98 @@ class DatabaseManager:
                 )
             )
             return result.rowcount
+
+    # ======== Portfolio Profile ========
+    def upsert_portfolio_profile(
+        self,
+        stock_code: str,
+        stock_name: Optional[str] = None,
+        status: str = "watch",
+        is_favorite: bool = False,
+        buy_price: Optional[float] = None,
+        position_pct: Optional[float] = None,
+        shares: Optional[float] = None,
+        target_buy_price: Optional[float] = None,
+        target_sell_price: Optional[float] = None,
+        stop_loss_price: Optional[float] = None,
+        tags: Optional[List[str]] = None,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        now = datetime.now()
+        tags_clean = [t.strip() for t in (tags or []) if t and str(t).strip()]
+        tags_json = self._safe_json_dumps(tags_clean)
+
+        with self.session_scope() as session:
+            profile = session.execute(
+                select(PortfolioProfile).where(PortfolioProfile.code == stock_code)
+            ).scalar_one_or_none()
+
+            if profile is None:
+                profile = PortfolioProfile(
+                    code=stock_code,
+                    created_at=now,
+                )
+                session.add(profile)
+
+            profile.name = stock_name or profile.name
+            profile.status = status
+            profile.is_favorite = bool(is_favorite)
+            profile.buy_price = buy_price
+            profile.position_pct = position_pct
+            profile.shares = shares
+            profile.target_buy_price = target_buy_price
+            profile.target_sell_price = target_sell_price
+            profile.stop_loss_price = stop_loss_price
+            profile.tags_json = tags_json
+            profile.notes = notes
+            profile.updated_at = now
+            session.flush()
+            return profile.to_dict()
+
+    def get_portfolio_profile(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        with self.session_scope() as session:
+            profile = session.execute(
+                select(PortfolioProfile).where(PortfolioProfile.code == stock_code)
+            ).scalar_one_or_none()
+            return profile.to_dict() if profile else None
+
+    def list_portfolio_profiles(
+        self,
+        status: Optional[str] = None,
+        favorite_only: bool = False,
+        keyword: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        with self.session_scope() as session:
+            stmt = select(PortfolioProfile)
+            conditions = []
+
+            if status:
+                conditions.append(PortfolioProfile.status == status)
+            if favorite_only:
+                conditions.append(PortfolioProfile.is_favorite.is_(True))
+            if keyword:
+                like_kw = f"%{keyword.strip()}%"
+                conditions.append(
+                    (PortfolioProfile.code.like(like_kw)) | (PortfolioProfile.name.like(like_kw))
+                )
+
+            if conditions:
+                stmt = stmt.where(and_(*conditions))
+
+            stmt = stmt.order_by(desc(PortfolioProfile.updated_at)).limit(limit)
+            profiles = session.execute(stmt).scalars().all()
+            return [p.to_dict() for p in profiles]
+
+    def delete_portfolio_profile(self, stock_code: str) -> bool:
+        with self.session_scope() as session:
+            profile = session.execute(
+                select(PortfolioProfile).where(PortfolioProfile.code == stock_code)
+            ).scalar_one_or_none()
+            if profile is None:
+                return False
+            session.delete(profile)
+            return True
 
 
 # 便捷函数

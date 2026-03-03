@@ -896,6 +896,33 @@ class GeminiAnalyzer:
 - 成交量较昨日变化：{volume_change}倍
 - 价格较昨日变化：{context.get('price_change_ratio', 'N/A')}%
 """
+
+        # 添加用户交易档案（用于个性化分析）
+        if 'trader_profile' in context:
+            profile = context.get('trader_profile') or {}
+            status_map = {
+                'holding': '持仓中',
+                'watch': '观望跟踪',
+                'candidate': '候选标的',
+                'archived': '归档',
+            }
+            status_label = status_map.get(profile.get('status', 'watch'), profile.get('status', 'watch'))
+            tags = profile.get('tags') or []
+            prompt += f"""
+---
+
+## 🧾 我的交易信息（必须纳入结论）
+- 当前状态：**{status_label}**
+- 收藏关注：**{'是' if profile.get('is_favorite') else '否'}**
+- 买入价：{profile.get('buy_price', 'N/A')} 元
+- 当前仓位：{profile.get('position_pct', 'N/A')}%
+- 持仓股数：{profile.get('shares', 'N/A')}
+- 计划入场价：{profile.get('target_buy_price', 'N/A')} 元
+- 计划止盈价：{profile.get('target_sell_price', 'N/A')} 元
+- 计划止损价：{profile.get('stop_loss_price', 'N/A')} 元
+- 标签：{', '.join(str(t) for t in tags) if tags else '无'}
+- 备注：{profile.get('notes', '无')}
+"""
         
         # 添加新闻搜索结果（重点区域）
         prompt += """
@@ -956,6 +983,7 @@ class GeminiAnalyzer:
 3. ❓ 量能是否配合（缩量回调/放量突破）？
 4. ❓ 筹码结构是否健康？
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
+6. ❓ 结合“我的交易信息”给出差异化建议（持仓管理/分批建仓/继续观望触发条件）
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
