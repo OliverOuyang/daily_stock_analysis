@@ -368,6 +368,10 @@ def run_market_discover_scan(
         if not sectors_raw:
             source = "mock_fallback"
             sectors_raw = _build_mock_hot_sectors(top_n=top_n, leaders_per_sector=leaders_per_sector)
+        elif not any(sec.get("leaders") for sec in sectors_raw):
+            logger.warning("市场扫描结果仅有板块无龙头，启用 mock 龙头兜底")
+            source = "mock_fallback"
+            sectors_raw = _build_mock_hot_sectors(top_n=top_n, leaders_per_sector=leaders_per_sector)
         if use_cache:
             _set_cached_discover_result(cache_key, source, sectors_raw, analysis_triggered=False)
 

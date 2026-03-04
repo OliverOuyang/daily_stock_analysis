@@ -127,6 +127,25 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         self.assertGreaterEqual(len(data["sectors"][0]["leaders"]), 2)
 
     @patch("api.v1.endpoints.market.get_task_queue")
+    @patch("api.v1.endpoints.market._discover_hot_sectors")
+    def test_market_discover_fallback_when_leaders_all_empty(self, mock_discover, mock_get_queue) -> None:
+        mock_discover.return_value = (
+            "akshare",
+            [
+                {"sector_name": "人工智能", "change_pct": 1.2, "leaders": []},
+                {"sector_name": "半导体", "change_pct": 0.9, "leaders": []},
+            ],
+        )
+        mock_get_queue.return_value = _FakeTaskQueue()
+
+        resp = self.client.get("/api/v1/market/discover?trigger_analysis=false")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["source"], "mock_fallback")
+        self.assertGreaterEqual(data["total_sectors"], 1)
+        self.assertGreaterEqual(len(data["sectors"][0]["leaders"]), 2)
+
+    @patch("api.v1.endpoints.market.get_task_queue")
     @patch("api.v1.endpoints.market._discover_hot_sectors", side_effect=RuntimeError("network down"))
     def test_market_discover_final_guard_returns_200(self, _mock_discover, mock_get_queue) -> None:
         mock_get_queue.return_value = _FakeTaskQueue()
