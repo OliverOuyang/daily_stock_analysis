@@ -27,6 +27,7 @@ class PortfolioProfileUpsertRequest(BaseModel):
     stop_loss_price: Optional[float] = Field(None, ge=0, description="止损价")
 
     tags: List[str] = Field(default_factory=list, description="标签列表")
+    action_history: Optional[List[str]] = Field(None, description="历史操作记录")
     notes: Optional[str] = Field(None, description="备注")
 
 
@@ -44,6 +45,7 @@ class PortfolioProfile(BaseModel):
     target_sell_price: Optional[float] = None
     stop_loss_price: Optional[float] = None
     tags: List[str] = Field(default_factory=list)
+    action_history: Optional[List[str]] = None
     notes: Optional[str] = None
 
     created_at: Optional[str] = None
@@ -53,4 +55,3 @@ class PortfolioProfile(BaseModel):
 class PortfolioProfileListResponse(BaseModel):
     total: int
     items: List[PortfolioProfile]
-

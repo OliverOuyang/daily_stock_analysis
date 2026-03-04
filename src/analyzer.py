@@ -908,6 +908,8 @@ class GeminiAnalyzer:
             }
             status_label = status_map.get(profile.get('status', 'watch'), profile.get('status', 'watch'))
             tags = profile.get('tags') or []
+            action_history = profile.get('action_history') or []
+            action_text = chr(10).join(f"- {x}" for x in action_history) if action_history else "- 无"
             prompt += f"""
 ---
 
@@ -922,6 +924,9 @@ class GeminiAnalyzer:
 - 计划止损价：{profile.get('stop_loss_price', 'N/A')} 元
 - 标签：{', '.join(str(t) for t in tags) if tags else '无'}
 - 备注：{profile.get('notes', '无')}
+
+### 最近操作记录（必须结合到策略）
+{action_text}
 """
         
         # 添加新闻搜索结果（重点区域）
@@ -984,6 +989,7 @@ class GeminiAnalyzer:
 4. ❓ 筹码结构是否健康？
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
 6. ❓ 结合“我的交易信息”给出差异化建议（持仓管理/分批建仓/继续观望触发条件）
+7. ❓ 必须考虑“最近操作记录”，避免给出与既有动作冲突的建议
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）

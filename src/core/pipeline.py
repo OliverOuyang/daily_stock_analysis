@@ -441,6 +441,7 @@ class StockAnalysisPipeline:
                 'stop_loss_price': trader_profile.get('stop_loss_price'),
                 'notes': trader_profile.get('notes'),
                 'tags': trader_profile.get('tags') or [],
+                'action_history': trader_profile.get('action_history') or [],
             }
             enhanced['trader_profile'] = {
                 k: v for k, v in enhanced['trader_profile'].items()

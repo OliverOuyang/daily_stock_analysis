@@ -112,6 +112,7 @@ def upsert_profile(
             target_sell_price=request.target_sell_price,
             stop_loss_price=request.stop_loss_price,
             tags=request.tags,
+            action_history=request.action_history,
             notes=request.notes,
         )
         return PortfolioProfile(**data)
@@ -140,4 +141,3 @@ def delete_profile(
     except Exception as e:
         logger.error("删除交易档案失败: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail={"error": "internal_error", "message": "删除交易档案失败"})
-

@@ -59,21 +59,23 @@ class PortfolioApiTestCase(unittest.TestCase):
                 "target_sell_price": 1888,
                 "stop_loss_price": 1550,
                 "tags": ["白酒", "核心仓位"],
+                "action_history": ["2026-03-01: 1700 买入 100 股", "2026-03-02: 1750 减仓 50 股"],
                 "notes": "回调再加仓",
             },
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["stockCode"], "600519")
+        self.assertEqual(payload["stock_code"], "600519")
         self.assertEqual(payload["status"], "holding")
-        self.assertTrue(payload["isFavorite"])
+        self.assertTrue(payload["is_favorite"])
 
         get_resp = self.client.get("/api/v1/portfolio/profiles/600519")
         self.assertEqual(get_resp.status_code, 200)
         data = get_resp.json()
-        self.assertEqual(data["buyPrice"], 1688.5)
-        self.assertEqual(data["positionPct"], 35)
+        self.assertEqual(data["buy_price"], 1688.5)
+        self.assertEqual(data["position_pct"], 35)
         self.assertIn("白酒", data["tags"])
+        self.assertEqual(len(data.get("action_history") or []), 2)
 
     def test_list_with_filters(self) -> None:
         self.client.put(
@@ -108,4 +110,3 @@ class PortfolioApiTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

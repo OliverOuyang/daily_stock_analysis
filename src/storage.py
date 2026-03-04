@@ -38,6 +38,7 @@ from sqlalchemy import (
     and_,
     delete,
     desc,
+    text,
 )
 from sqlalchemy.orm import (
     declarative_base,
@@ -404,6 +405,7 @@ class PortfolioProfile(Base):
     stop_loss_price = Column(Float)    # 计划止损价
 
     tags_json = Column(Text)           # JSON string list
+    action_history_json = Column(Text) # JSON string list: 用户历史操作
     notes = Column(Text)
 
     created_at = Column(DateTime, default=datetime.now, index=True)
@@ -415,6 +417,7 @@ class PortfolioProfile(Base):
 
     def to_dict(self) -> Dict[str, Any]:
         tags: List[str] = []
+        action_history: List[str] = []
         if self.tags_json:
             try:
                 parsed = json.loads(self.tags_json)
@@ -422,6 +425,13 @@ class PortfolioProfile(Base):
                     tags = [str(x).strip() for x in parsed if str(x).strip()]
             except Exception:
                 tags = []
+        if self.action_history_json:
+            try:
+                parsed = json.loads(self.action_history_json)
+                if isinstance(parsed, list):
+                    action_history = [str(x).strip() for x in parsed if str(x).strip()]
+            except Exception:
+                action_history = []
         return {
             "id": self.id,
             "stock_code": self.code,
@@ -435,6 +445,7 @@ class PortfolioProfile(Base):
             "target_sell_price": self.target_sell_price,
             "stop_loss_price": self.stop_loss_price,
             "tags": tags,
+            "action_history": action_history,
             "notes": self.notes,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -491,6 +502,7 @@ class DatabaseManager:
         
         # 创建所有表
         Base.metadata.create_all(self._engine)
+        self._ensure_portfolio_profile_columns()
 
         self._initialized = True
         logger.info(f"数据库初始化完成: {db_url}")
@@ -530,6 +542,22 @@ class DatabaseManager:
                 logger.debug("数据库引擎已清理")
         except Exception as e:
             logger.warning(f"清理数据库引擎时出错: {e}")
+
+    def _ensure_portfolio_profile_columns(self) -> None:
+        """
+        兼容历史数据库：为 portfolio_profiles 自动补齐新增字段。
+        """
+        try:
+            with self._engine.begin() as conn:
+                rows = conn.execute(text("PRAGMA table_info(portfolio_profiles)")).fetchall()
+                if not rows:
+                    return
+                cols = {row[1] for row in rows}
+                if "action_history_json" not in cols:
+                    conn.execute(text("ALTER TABLE portfolio_profiles ADD COLUMN action_history_json TEXT"))
+                    logger.info("数据库迁移: 已为 portfolio_profiles 添加 action_history_json")
+        except Exception as e:
+            logger.warning(f"检查/迁移 portfolio_profiles 结构失败: {e}")
     
     def get_session(self) -> Session:
         """
@@ -1525,6 +1553,7 @@ class DatabaseManager:
         target_sell_price: Optional[float] = None,
         stop_loss_price: Optional[float] = None,
         tags: Optional[List[str]] = None,
+        action_history: Optional[List[str]] = None,
         notes: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = datetime.now()
@@ -1553,6 +1582,11 @@ class DatabaseManager:
             profile.target_sell_price = target_sell_price
             profile.stop_loss_price = stop_loss_price
             profile.tags_json = tags_json
+            if action_history is not None:
+                action_history_clean = [x.strip() for x in action_history if x and str(x).strip()]
+                profile.action_history_json = self._safe_json_dumps(action_history_clean)
+            elif profile.action_history_json is None:
+                profile.action_history_json = self._safe_json_dumps([])
             profile.notes = notes
             profile.updated_at = now
             session.flush()
