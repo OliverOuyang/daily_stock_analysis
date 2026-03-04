@@ -22,6 +22,7 @@ class PortfolioProfileUpsertRequest(BaseModel):
     buy_price: Optional[float] = Field(None, ge=0, description="买入价")
     position_pct: Optional[float] = Field(None, ge=0, le=100, description="仓位百分比")
     shares: Optional[float] = Field(None, ge=0, description="持仓股数")
+    total_investment: Optional[float] = Field(None, ge=0, description="计划投入总额")
     target_buy_price: Optional[float] = Field(None, ge=0, description="目标入场价")
     target_sell_price: Optional[float] = Field(None, ge=0, description="目标止盈价")
     stop_loss_price: Optional[float] = Field(None, ge=0, description="止损价")
@@ -41,6 +42,7 @@ class PortfolioProfile(BaseModel):
     buy_price: Optional[float] = None
     position_pct: Optional[float] = None
     shares: Optional[float] = None
+    total_investment: Optional[float] = None
     target_buy_price: Optional[float] = None
     target_sell_price: Optional[float] = None
     stop_loss_price: Optional[float] = None

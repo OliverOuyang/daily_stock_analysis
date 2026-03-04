@@ -918,7 +918,9 @@ class GeminiAnalyzer:
 - 收藏关注：**{'是' if profile.get('is_favorite') else '否'}**
 - 买入价：{profile.get('buy_price', 'N/A')} 元
 - 当前仓位：{profile.get('position_pct', 'N/A')}%
+- 当前持仓(current_position)：{profile.get('current_position', profile.get('position_pct', 'N/A'))}%
 - 持仓股数：{profile.get('shares', 'N/A')}
+- 计划投入总额：{profile.get('total_investment', 'N/A')} 元
 - 计划入场价：{profile.get('target_buy_price', 'N/A')} 元
 - 计划止盈价：{profile.get('target_sell_price', 'N/A')} 元
 - 计划止损价：{profile.get('stop_loss_price', 'N/A')} 元
@@ -990,6 +992,7 @@ class GeminiAnalyzer:
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
 6. ❓ 结合“我的交易信息”给出差异化建议（持仓管理/分批建仓/继续观望触发条件）
 7. ❓ 必须考虑“最近操作记录”，避免给出与既有动作冲突的建议
+8. ❓ 基于 current_position 明确给出补仓/减仓比例建议（例如 10%-20%）
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）

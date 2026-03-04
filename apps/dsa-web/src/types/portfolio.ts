@@ -9,6 +9,7 @@ export interface PortfolioProfile {
   buyPrice?: number;
   positionPct?: number;
   shares?: number;
+  totalInvestment?: number;
   targetBuyPrice?: number;
   targetSellPrice?: number;
   stopLossPrice?: number;
@@ -32,6 +33,7 @@ export interface PortfolioUpsertRequest {
   buyPrice?: number;
   positionPct?: number;
   shares?: number;
+  totalInvestment?: number;
   targetBuyPrice?: number;
   targetSellPrice?: number;
   stopLossPrice?: number;

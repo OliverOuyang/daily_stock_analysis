@@ -400,6 +400,7 @@ class PortfolioProfile(Base):
     buy_price = Column(Float)
     position_pct = Column(Float)       # 仓位百分比（0~100）
     shares = Column(Float)             # 持仓股数
+    total_investment = Column(Float)   # 计划投入总额
     target_buy_price = Column(Float)   # 计划入场价
     target_sell_price = Column(Float)  # 计划止盈价
     stop_loss_price = Column(Float)    # 计划止损价
@@ -441,6 +442,7 @@ class PortfolioProfile(Base):
             "buy_price": self.buy_price,
             "position_pct": self.position_pct,
             "shares": self.shares,
+            "total_investment": self.total_investment,
             "target_buy_price": self.target_buy_price,
             "target_sell_price": self.target_sell_price,
             "stop_loss_price": self.stop_loss_price,
@@ -556,6 +558,9 @@ class DatabaseManager:
                 if "action_history_json" not in cols:
                     conn.execute(text("ALTER TABLE portfolio_profiles ADD COLUMN action_history_json TEXT"))
                     logger.info("数据库迁移: 已为 portfolio_profiles 添加 action_history_json")
+                if "total_investment" not in cols:
+                    conn.execute(text("ALTER TABLE portfolio_profiles ADD COLUMN total_investment FLOAT"))
+                    logger.info("数据库迁移: 已为 portfolio_profiles 添加 total_investment")
         except Exception as e:
             logger.warning(f"检查/迁移 portfolio_profiles 结构失败: {e}")
     
@@ -1549,6 +1554,7 @@ class DatabaseManager:
         buy_price: Optional[float] = None,
         position_pct: Optional[float] = None,
         shares: Optional[float] = None,
+        total_investment: Optional[float] = None,
         target_buy_price: Optional[float] = None,
         target_sell_price: Optional[float] = None,
         stop_loss_price: Optional[float] = None,
@@ -1578,6 +1584,7 @@ class DatabaseManager:
             profile.buy_price = buy_price
             profile.position_pct = position_pct
             profile.shares = shares
+            profile.total_investment = total_investment
             profile.target_buy_price = target_buy_price
             profile.target_sell_price = target_sell_price
             profile.stop_loss_price = stop_loss_price

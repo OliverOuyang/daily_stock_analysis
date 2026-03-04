@@ -32,6 +32,7 @@ export const portfolioApi = {
         buy_price: payload.buyPrice,
         position_pct: payload.positionPct,
         shares: payload.shares,
+        total_investment: payload.totalInvestment,
         target_buy_price: payload.targetBuyPrice,
         target_sell_price: payload.targetSellPrice,
         stop_loss_price: payload.stopLossPrice,

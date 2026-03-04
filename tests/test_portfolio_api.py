@@ -55,6 +55,7 @@ class PortfolioApiTestCase(unittest.TestCase):
                 "is_favorite": True,
                 "buy_price": 1688.5,
                 "position_pct": 35,
+                "total_investment": 500000,
                 "target_buy_price": 1600,
                 "target_sell_price": 1888,
                 "stop_loss_price": 1550,
@@ -74,6 +75,7 @@ class PortfolioApiTestCase(unittest.TestCase):
         data = get_resp.json()
         self.assertEqual(data["buy_price"], 1688.5)
         self.assertEqual(data["position_pct"], 35)
+        self.assertEqual(data["total_investment"], 500000)
         self.assertIn("白酒", data["tags"])
         self.assertEqual(len(data.get("action_history") or []), 2)
 

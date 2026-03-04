@@ -108,6 +108,7 @@ def upsert_profile(
             buy_price=request.buy_price,
             position_pct=request.position_pct,
             shares=request.shares,
+            total_investment=request.total_investment,
             target_buy_price=request.target_buy_price,
             target_sell_price=request.target_sell_price,
             stop_loss_price=request.stop_loss_price,
