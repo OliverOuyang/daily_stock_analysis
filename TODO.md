@@ -9,7 +9,7 @@
 
 ## Future TODO (Need hardening / verification)
 
-- [ ] `api/v1/endpoints/market.py`: add explicit cache invalidation API/strategy and observability (cache hit ratio, stale age) for discover cache.
+- [x] `api/v1/endpoints/market.py`: add cache invalidation API and basic observability (`cache_hit`, `cache_age_seconds`, `cache_ttl_seconds`) for discover cache.
 - [ ] `api/v1/endpoints/market.py`: tighten leader quality filter with configurable market-cap floor (default 30B CNY), turnover/rank weighting, and min leaders per sector guarantee.
 - [ ] `src/scheduler.py`: make 10:30 / 14:30 scan task idempotent across multi-instance deployment (distributed lock).
 - [ ] `api/v1/endpoints/market.py`: enrich full-source failure fallback with stable mock pack + source error diagnostics for frontend display.

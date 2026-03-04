@@ -217,5 +217,44 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         self.assertNotIn("小盘非ST", names)
 
 
+    @patch("api.v1.endpoints.market.get_task_queue")
+    @patch("api.v1.endpoints.market._discover_hot_sectors")
+    def test_market_discover_cache_meta_and_invalidate(self, mock_discover, mock_get_queue) -> None:
+        os.environ["MARKET_DISCOVER_CACHE_TTL_SECONDS"] = "1800"
+        mock_discover.return_value = (
+            "akshare",
+            [
+                {
+                    "sector_name": "人工智能",
+                    "change_pct": 1.1,
+                    "leaders": [
+                        {"stock_code": "300308", "stock_name": "中际旭创", "change_pct": 2.2},
+                        {"stock_code": "002230", "stock_name": "科大讯飞", "change_pct": 1.2},
+                    ],
+                }
+            ],
+        )
+        mock_get_queue.return_value = _FakeTaskQueue()
+
+        first = self.client.get("/api/v1/market/discover")
+        self.assertEqual(first.status_code, 200)
+        first_data = first.json()
+        self.assertFalse(first_data["cache_hit"])
+        self.assertIsNone(first_data["cache_age_seconds"])
+        self.assertGreater(first_data["cache_ttl_seconds"], 0)
+
+        second = self.client.get("/api/v1/market/discover")
+        self.assertEqual(second.status_code, 200)
+        second_data = second.json()
+        self.assertTrue(second_data["cache_hit"])
+        self.assertIsInstance(second_data["cache_age_seconds"], int)
+
+        inv = self.client.post("/api/v1/market/discover/cache/invalidate")
+        self.assertEqual(inv.status_code, 200)
+        inv_data = inv.json()
+        self.assertTrue(inv_data["success"])
+        self.assertGreaterEqual(inv_data["data"]["removed_entries"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query
 
-from api.v1.schemas.common import ErrorResponse
+from api.v1.schemas.common import ErrorResponse, SuccessResponse
 from api.v1.schemas.market import MarketDiscoverResponse, MarketLeader, SectorDiscoverItem
 from data_provider.base import canonical_stock_code
 from src.storage import get_db
@@ -136,7 +136,8 @@ def _get_cached_discover_result(key: Tuple[int, int, Optional[int]], ttl_seconds
         item = _DISCOVER_CACHE.get(key)
         if not item:
             return None
-        if now - item["ts"] > ttl_seconds:
+        age_seconds = int(now - item["ts"])
+        if age_seconds > ttl_seconds:
             _DISCOVER_CACHE.pop(key, None)
             return None
         # Return shallow copy to avoid accidental mutation.
@@ -144,6 +145,7 @@ def _get_cached_discover_result(key: Tuple[int, int, Optional[int]], ttl_seconds
             "source": item["source"],
             "sectors": [dict(x) for x in item["sectors"]],
             "analysis_triggered": bool(item.get("analysis_triggered", False)),
+            "cache_age_seconds": age_seconds,
         }
 
 
@@ -167,6 +169,13 @@ def _mark_cached_analysis_triggered(key: Tuple[int, int, Optional[int]]) -> None
         item = _DISCOVER_CACHE.get(key)
         if item:
             item["analysis_triggered"] = True
+
+
+def _clear_discover_cache() -> int:
+    with _CACHE_LOCK:
+        count = len(_DISCOVER_CACHE)
+        _DISCOVER_CACHE.clear()
+    return count
 
 
 def _discover_hot_sectors(top_n: int, leaders_per_sector: int) -> Tuple[str, List[Dict[str, Any]]]:
@@ -351,6 +360,8 @@ def run_market_discover_scan(
     source = "akshare_em"
     sectors_raw: List[Dict[str, Any]] = []
     analysis_triggered_on_cache = False
+    cache_hit = False
+    cache_age_seconds: Optional[int] = None
 
     if use_cache:
         cached = _get_cached_discover_result(cache_key, _MARKET_DISCOVER_CACHE_TTL_SECONDS)
@@ -358,6 +369,8 @@ def run_market_discover_scan(
             source = cached["source"]
             sectors_raw = cached["sectors"]
             analysis_triggered_on_cache = bool(cached["analysis_triggered"])
+            cache_hit = True
+            cache_age_seconds = cached.get("cache_age_seconds")
             logger.debug("Market discover cache hit: top_n=%s leaders=%s", top_n, leaders_per_sector)
 
     if not sectors_raw:
@@ -459,6 +472,9 @@ def run_market_discover_scan(
         triggered_tasks=triggered_tasks,
         duplicate_tasks=duplicate_tasks,
         sectors=sectors,
+        cache_hit=cache_hit,
+        cache_age_seconds=cache_age_seconds,
+        cache_ttl_seconds=_MARKET_DISCOVER_CACHE_TTL_SECONDS,
     )
 
 
@@ -492,6 +508,9 @@ def discover_market(
             total_sectors=3,
             triggered_tasks=0,
             duplicate_tasks=0,
+            cache_hit=False,
+            cache_age_seconds=None,
+            cache_ttl_seconds=_MARKET_DISCOVER_CACHE_TTL_SECONDS,
             sectors=[
                 SectorDiscoverItem(
                     sector_name=x["sector_name"],
@@ -501,3 +520,17 @@ def discover_market(
                 for x in _MOCK_HOT_SECTORS
             ],
         )
+
+
+@router.post(
+    "/discover/cache/invalidate",
+    response_model=SuccessResponse,
+    summary="清空市场发现缓存",
+)
+def invalidate_discover_cache() -> SuccessResponse:
+    removed = _clear_discover_cache()
+    return SuccessResponse(
+        success=True,
+        message="market discover cache invalidated",
+        data={"removed_entries": removed, "ttl_seconds": _MARKET_DISCOVER_CACHE_TTL_SECONDS},
+    )

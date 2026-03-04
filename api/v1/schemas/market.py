@@ -26,3 +26,6 @@ class MarketDiscoverResponse(BaseModel):
     triggered_tasks: int
     duplicate_tasks: int
     sectors: List[SectorDiscoverItem]
+    cache_hit: bool = Field(False, description="是否命中缓存")
+    cache_age_seconds: Optional[int] = Field(None, description="缓存年龄(秒)")
+    cache_ttl_seconds: Optional[int] = Field(None, description="缓存TTL(秒)")
