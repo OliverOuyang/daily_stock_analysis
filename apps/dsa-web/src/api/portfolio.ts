@@ -36,6 +36,7 @@ export const portfolioApi = {
         target_sell_price: payload.targetSellPrice,
         stop_loss_price: payload.stopLossPrice,
         tags: payload.tags ?? [],
+        action_history: payload.actionHistory,
         notes: payload.notes,
       }
     );
@@ -46,4 +47,3 @@ export const portfolioApi = {
     await apiClient.delete(`/api/v1/portfolio/profiles/${encodeURIComponent(stockCode)}`);
   },
 };
-

@@ -60,6 +60,15 @@ const HomePage: React.FC = () => {
   const [targetSellInput, setTargetSellInput] = useState('');
   const [stopLossInput, setStopLossInput] = useState('');
   const [notesInput, setNotesInput] = useState('');
+  const [actionHistory, setActionHistory] = useState<string[]>([]);
+  const [newAction, setNewAction] = useState('');
+
+  // 建议值（来自最近一次分析）
+  const [suggestedValues, setSuggestedValues] = useState<{
+    targetBuy?: string;
+    targetSell?: string;
+    stopLoss?: string;
+  }>({});
 
   // 用于跟踪当前分析请求，避免竞态条件
   const analysisRequestIdRef = useRef<number>(0);
@@ -131,8 +140,24 @@ const HomePage: React.FC = () => {
     }
   }, []);
 
+  const resetTradeForm = useCallback(() => {
+    setProfileStatus('watch');
+    setProfileFavorite(false);
+    setBuyPriceInput('');
+    setPositionPctInput('');
+    setSharesInput('');
+    setTargetBuyInput('');
+    setTargetSellInput('');
+    setStopLossInput('');
+    setNotesInput('');
+    setActionHistory([]);
+  }, []);
+
   const fillTradeFormFromProfile = useCallback((profile?: PortfolioProfile) => {
-    if (!profile) return;
+    if (!profile) {
+      resetTradeForm();
+      return;
+    }
     setProfileStatus(profile.status);
     setProfileFavorite(profile.isFavorite);
     setBuyPriceInput(profile.buyPrice === undefined ? '' : String(profile.buyPrice));
@@ -142,7 +167,8 @@ const HomePage: React.FC = () => {
     setTargetSellInput(profile.targetSellPrice === undefined ? '' : String(profile.targetSellPrice));
     setStopLossInput(profile.stopLossPrice === undefined ? '' : String(profile.stopLossPrice));
     setNotesInput(profile.notes || '');
-  }, []);
+    setActionHistory(profile.actionHistory || []);
+  }, [resetTradeForm]);
 
   const submitAnalyzeCodesInBatches = useCallback(async (codes: string[]) => {
     let accepted = 0;
@@ -287,6 +313,14 @@ const HomePage: React.FC = () => {
       // Ignore result if a newer click has already been issued.
       if (requestId === analysisRequestIdRef.current) {
         setSelectedReport(report);
+        // 更新建议值
+        if (report.strategy) {
+          setSuggestedValues({
+            targetBuy: report.strategy.idealBuy || report.strategy.secondaryBuy,
+            targetSell: report.strategy.takeProfit,
+            stopLoss: report.strategy.stopLoss,
+          });
+        }
       }
     } catch (err) {
       console.error('Failed to fetch report:', err);
@@ -309,7 +343,7 @@ const HomePage: React.FC = () => {
     setLoading(true);
     setStoreError(null);
 
-    // 记录当前请求的 ID
+    // 记录当前请求 ID
     const currentRequestId = ++analysisRequestIdRef.current;
 
     try {
@@ -361,6 +395,7 @@ const HomePage: React.FC = () => {
         targetBuyPrice: toNumber(targetBuyInput),
         targetSellPrice: toNumber(targetSellInput),
         stopLossPrice: toNumber(stopLossInput),
+        actionHistory,
         notes: notesInput.trim() || undefined,
       });
       setBatchInfo(`已保存 ${profile.stockCode} 的交易信息`);
@@ -371,17 +406,20 @@ const HomePage: React.FC = () => {
     }
   };
 
-  const handleQuickAnalyzeFromWatchlist = async (code: string) => {
-    setStockCode(code);
+  const handleQuickAnalyzeFromWatchlist = async (code: string | string[]) => {
+    const codes = Array.isArray(code) ? code : [code];
+    if (codes.length === 1) {
+      setStockCode(codes[0]);
+    }
     setDuplicateError(null);
     setInputError(undefined);
     setIsAnalyzing(true);
     setLoading(true);
     try {
-      await submitAnalyzeCodesInBatches([code]);
+      await submitAnalyzeCodesInBatches(codes);
     } catch (err) {
       if (err instanceof DuplicateTaskError) {
-        setDuplicateError(`股票 ${err.stockCode} 正在分析中，请等待完成`);
+        setDuplicateError(`正在分析中，请等待完成`);
       } else {
         setStoreError(err instanceof Error ? err.message : '分析失败');
       }
@@ -389,6 +427,38 @@ const HomePage: React.FC = () => {
       setIsAnalyzing(false);
       setLoading(false);
     }
+  };
+
+  const handleSelectFromWatchlist = async (code: string) => {
+    setStockCode(code);
+    const profile = profiles.find((p) => p.stockCode === code);
+    fillTradeFormFromProfile(profile);
+
+    // 自动加载该股票的最新历史报告
+    try {
+      const response = await historyApi.getList({
+        stockCode: code,
+        page: 1,
+        limit: 1,
+      });
+      if (response.items.length > 0) {
+        handleHistoryClick(response.items[0].id);
+      } else {
+        setSelectedReport(null);
+        setSuggestedValues({});
+      }
+    } catch (err) {
+      console.warn('Failed to fetch latest history for', code);
+      setSelectedReport(null);
+      setSuggestedValues({});
+    }
+  };
+
+  const addAction = () => {
+    if (!newAction.trim()) return;
+    const action = `[${new Date().toLocaleString()}] ${newAction.trim()}`;
+    setActionHistory((prev) => [action, ...prev]);
+    setNewAction('');
   };
 
   // 回车提交
@@ -410,9 +480,7 @@ const HomePage: React.FC = () => {
   useEffect(() => {
     if (!singleSaveCode) return;
     const profile = profiles.find((p) => p.stockCode === singleSaveCode);
-    if (profile) {
-      fillTradeFormFromProfile(profile);
-    }
+    fillTradeFormFromProfile(profile);
   }, [fillTradeFormFromProfile, profiles, singleSaveCode]);
 
   const handleDeleteProfile = async (code: string) => {
@@ -423,13 +491,7 @@ const HomePage: React.FC = () => {
       setBatchInfo(`已删除 ${code} 的交易档案`);
       await fetchPortfolioProfiles();
       if (stockCode.trim().toUpperCase() === code) {
-        setBuyPriceInput('');
-        setPositionPctInput('');
-        setSharesInput('');
-        setTargetBuyInput('');
-        setTargetSellInput('');
-        setStopLossInput('');
-        setNotesInput('');
+        resetTradeForm();
       }
     } catch (err) {
       console.error('Delete portfolio profile failed:', err);
@@ -444,11 +506,7 @@ const HomePage: React.FC = () => {
         isLoading={isLoadingProfiles}
         filter={profileFilter}
         onFilterChange={setProfileFilter}
-        onUseCode={(code) => {
-          setStockCode(code);
-          const profile = profiles.find((p) => p.stockCode === code);
-          fillTradeFormFromProfile(profile);
-        }}
+        onUseCode={handleSelectFromWatchlist}
         onAnalyze={(code) => { handleQuickAnalyzeFromWatchlist(code); setSidebarOpen(false); }}
         onDelete={(code) => { handleDeleteProfile(code); }}
       />
@@ -530,72 +588,168 @@ const HomePage: React.FC = () => {
           )}
 
           <div className="glass-card p-2.5">
-            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-1.5 text-xs">
-              <input value={buyPriceInput} onChange={(e) => setBuyPriceInput(e.target.value)} placeholder="买入价" className="input-terminal py-1.5 px-2" />
-              <input value={positionPctInput} onChange={(e) => setPositionPctInput(e.target.value)} placeholder="仓位%" className="input-terminal py-1.5 px-2" />
-              <input value={sharesInput} onChange={(e) => setSharesInput(e.target.value)} placeholder="持仓股数" className="input-terminal py-1.5 px-2" />
-              <input value={targetBuyInput} onChange={(e) => setTargetBuyInput(e.target.value)} placeholder="目标入场" className="input-terminal py-1.5 px-2" />
-              <input value={targetSellInput} onChange={(e) => setTargetSellInput(e.target.value)} placeholder="目标止盈" className="input-terminal py-1.5 px-2" />
-              <input value={stopLossInput} onChange={(e) => setStopLossInput(e.target.value)} placeholder="止损价" className="input-terminal py-1.5 px-2" />
-              <select
-                value={profileStatus}
-                onChange={(e) => setProfileStatus(e.target.value as PortfolioStatus)}
-                className="input-terminal py-1.5 px-2"
-              >
-                <option value="holding">持仓</option>
-                <option value="watch">观望</option>
-                <option value="candidate">候选</option>
-                <option value="archived">归档</option>
-              </select>
-              <label className="input-terminal py-1.5 px-2 inline-flex items-center justify-between gap-2 text-muted cursor-pointer">
-                <span>收藏</span>
-                <input
-                  type="checkbox"
-                  checked={profileFavorite}
-                  onChange={(e) => setProfileFavorite(e.target.checked)}
-                />
-              </label>
-              <textarea
-                value={notesInput}
-                onChange={(e) => setNotesInput(e.target.value)}
-                placeholder="备注（可选）"
-                rows={2}
-                className="input-terminal py-1.5 px-2 col-span-2 md:col-span-4 xl:col-span-5 resize-none"
-              />
-              <div className="col-span-2 md:col-span-4 xl:col-span-3 flex flex-wrap items-center gap-1.5 justify-start xl:justify-end">
-                <label className="text-muted text-[11px]">每批</label>
+            <div className="flex flex-col xl:flex-row gap-4">
+              <div className="flex-1 grid grid-cols-2 md:grid-cols-4 xl:grid-cols-4 gap-x-3 gap-y-2 text-[11px]">
+                <div className="space-y-1">
+                  <label className="text-muted block">买入价格</label>
+                  <input value={buyPriceInput} onChange={(e) => setBuyPriceInput(e.target.value)} placeholder="0.00" className="input-terminal py-1.5 px-2 w-full" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-muted block">当前仓位%</label>
+                  <input value={positionPctInput} onChange={(e) => setPositionPctInput(e.target.value)} placeholder="0" className="input-terminal py-1.5 px-2 w-full" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-muted block">持仓股数</label>
+                  <input value={sharesInput} onChange={(e) => setSharesInput(e.target.value)} placeholder="0" className="input-terminal py-1.5 px-2 w-full" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-muted block">档案状态</label>
+                  <select
+                    value={profileStatus}
+                    onChange={(e) => setProfileStatus(e.target.value as PortfolioStatus)}
+                    className="input-terminal py-1.5 px-2 w-full"
+                  >
+                    <option value="holding">持仓</option>
+                    <option value="watch">观望</option>
+                    <option value="candidate">候选</option>
+                    <option value="archived">归档</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-muted block flex items-center justify-between">
+                    目标入场
+                    {suggestedValues.targetBuy && (
+                      <button 
+                        onClick={() => setTargetBuyInput(suggestedValues.targetBuy!.replace(/[^0-9.]/g, ''))}
+                        className="text-[10px] text-cyan hover:underline"
+                      >
+                        采用建议: {suggestedValues.targetBuy}
+                      </button>
+                    )}
+                  </label>
+                  <input 
+                    value={targetBuyInput} 
+                    onChange={(e) => setTargetBuyInput(e.target.value)} 
+                    placeholder="目标入场价" 
+                    className={`input-terminal py-1.5 px-2 w-full ${suggestedValues.targetBuy ? 'border-cyan/30' : ''}`} 
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-muted block flex items-center justify-between">
+                    目标止盈
+                    {suggestedValues.targetSell && (
+                      <button 
+                        onClick={() => setTargetSellInput(suggestedValues.targetSell!.replace(/[^0-9.]/g, ''))}
+                        className="text-[10px] text-emerald-400 hover:underline"
+                      >
+                        采用建议: {suggestedValues.targetSell}
+                      </button>
+                    )}
+                  </label>
+                  <input 
+                    value={targetSellInput} 
+                    onChange={(e) => setTargetSellInput(e.target.value)} 
+                    placeholder="目标止盈价" 
+                    className={`input-terminal py-1.5 px-2 w-full ${suggestedValues.targetSell ? 'border-emerald-500/30' : ''}`} 
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-muted block flex items-center justify-between">
+                    止损价格
+                    {suggestedValues.stopLoss && (
+                      <button 
+                        onClick={() => setStopLossInput(suggestedValues.stopLoss!.replace(/[^0-9.]/g, ''))}
+                        className="text-[10px] text-rose-400 hover:underline"
+                      >
+                        采用建议: {suggestedValues.stopLoss}
+                      </button>
+                    )}
+                  </label>
+                  <input 
+                    value={stopLossInput} 
+                    onChange={(e) => setStopLossInput(e.target.value)} 
+                    placeholder="止损价" 
+                    className={`input-terminal py-1.5 px-2 w-full ${suggestedValues.stopLoss ? 'border-rose-500/30' : ''}`} 
+                  />
+                </div>
+                <div className="flex items-end gap-1.5 pb-0.5">
+                  <label className="input-terminal py-1.5 px-2 inline-flex items-center justify-between gap-2 text-muted cursor-pointer flex-1">
+                    <span>收藏</span>
+                    <input
+                      type="checkbox"
+                      checked={profileFavorite}
+                      onChange={(e) => setProfileFavorite(e.target.checked)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleSaveTradeProfile}
+                    className="btn-primary py-1.5 px-3 h-[34px] whitespace-nowrap"
+                    disabled={isAnalyzing || !canSaveTradeProfile}
+                  >
+                    保存档案
+                  </button>
+                </div>
+              </div>
+
+              <div className="xl:w-80 flex flex-col gap-2">
+                <div className="space-y-1">
+                  <label className="text-muted text-[11px] block">操作记录 / 个人笔记</label>
+                  <div className="flex gap-1.5">
+                    <input 
+                      value={newAction} 
+                      onChange={(e) => setNewAction(e.target.value)} 
+                      placeholder="记录一笔操作，如：卖出半仓 @35" 
+                      className="input-terminal py-1.5 px-2 text-[11px] flex-1"
+                      onKeyDown={(e) => e.key === 'Enter' && addAction()}
+                    />
+                    <button onClick={addAction} className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-white text-[11px]">记录</button>
+                  </div>
+                </div>
+                <div className="max-h-24 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                  {actionHistory.map((act, i) => (
+                    <div key={i} className="text-[10px] text-secondary py-1 px-1.5 rounded bg-white/5 border border-white/5">
+                      {act}
+                    </div>
+                  ))}
+                  <textarea
+                    value={notesInput}
+                    onChange={(e) => setNotesInput(e.target.value)}
+                    placeholder="补充更多笔记..."
+                    rows={2}
+                    className="input-terminal py-1.5 px-2 text-[11px] w-full resize-none mt-1"
+                  />
+                </div>
+              </div>
+            </div>
+            
+            <div className="mt-2 pt-2 border-t border-white/5 flex flex-wrap items-center gap-4">
+               <div className="flex items-center gap-1.5">
+                <label className="text-muted text-[10px]">批量配置: 每批</label>
                 <input
                   type="number"
                   min={1}
                   max={20}
                   value={batchSize}
                   onChange={(e) => setBatchSize(clampBatchSize(Number(e.target.value)))}
-                  className="input-terminal py-1.5 px-2 w-16"
-                  title="每批数量"
+                  className="input-terminal py-1 px-2 w-12 text-[11px]"
                 />
-                <label className="text-muted text-[11px]">间隔ms</label>
+                <label className="text-muted text-[10px]">间隔ms</label>
                 <input
                   type="number"
                   min={0}
                   max={5000}
                   value={batchDelayMs}
                   onChange={(e) => setBatchDelayMs(clampBatchDelayMs(Number(e.target.value)))}
-                  className="input-terminal py-1.5 px-2 w-20"
-                  title="批次间隔ms"
+                  className="input-terminal py-1 px-2 w-16 text-[11px]"
                 />
-                <button
-                  type="button"
-                  onClick={handleSaveTradeProfile}
-                  className="btn-primary py-1.5 px-3 whitespace-nowrap"
-                  disabled={isAnalyzing || !canSaveTradeProfile}
-                >
-                  保存交易信息
-                </button>
               </div>
+              <p className="text-[10px] text-muted ml-auto italic">提示: 点击自选池股票可快速加载历史分析与档案信息</p>
             </div>
           </div>
         </div>
       </header>
+
 
       {/* Desktop sidebar */}
       <div className="hidden md:flex col-start-2 row-start-2 flex-col gap-3 overflow-hidden min-h-0">

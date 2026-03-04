@@ -1,4 +1,5 @@
 import type React from 'react';
+import { useState } from 'react';
 import type { PortfolioProfile, PortfolioStatus } from '../../types/portfolio';
 
 type FilterValue = 'all' | PortfolioStatus | 'favorite';
@@ -9,7 +10,7 @@ interface WatchlistPanelProps {
   filter: FilterValue;
   onFilterChange: (value: FilterValue) => void;
   onUseCode: (code: string) => void;
-  onAnalyze: (code: string) => void;
+  onAnalyze: (code: string | string[]) => void;
   onDelete: (code: string) => void;
 }
 
@@ -36,11 +37,48 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
   onAnalyze,
   onDelete,
 }) => {
+  const [selectedCodes, setSelectedCodes] = useState<Set<string>>(new Set());
+
+  const toggleSelect = (code: string) => {
+    const next = new Set(selectedCodes);
+    if (next.has(code)) {
+      next.delete(code);
+    } else {
+      next.add(code);
+    }
+    setSelectedCodes(next);
+  };
+
+  const toggleAll = () => {
+    if (selectedCodes.size === items.length && items.length > 0) {
+      setSelectedCodes(new Set());
+    } else {
+      setSelectedCodes(new Set(items.map(i => i.stockCode)));
+    }
+  };
+
+  const handleBatchAnalyze = () => {
+    if (selectedCodes.size > 0) {
+      onAnalyze(Array.from(selectedCodes));
+      setSelectedCodes(new Set());
+    }
+  };
+
   return (
     <aside className="glass-card overflow-hidden flex flex-col">
       <div className="p-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
-          <h2 className="text-xs font-medium text-cyan uppercase tracking-wider">自选池筛选</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-xs font-medium text-cyan uppercase tracking-wider">自选池筛选</h2>
+            {items.length > 0 && (
+              <button
+                onClick={toggleAll}
+                className="text-[10px] text-muted hover:text-cyan px-1.5 py-0.5 border border-white/10 rounded"
+              >
+                {selectedCodes.size === items.length ? '全取消' : '全选'}
+              </button>
+            )}
+          </div>
           <select
             value={filter}
             onChange={(e) => onFilterChange(e.target.value as FilterValue)}
@@ -54,39 +92,67 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
           </select>
         </div>
 
+        {selectedCodes.size > 0 && (
+          <div className="flex items-center justify-between p-2 rounded-lg bg-cyan/10 border border-cyan/30 mb-2">
+            <span className="text-[11px] text-cyan-300">已选 {selectedCodes.size} 个股票</span>
+            <button
+              onClick={handleBatchAnalyze}
+              className="text-[11px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 transition-colors"
+            >
+              分析选中
+            </button>
+          </div>
+        )}
+
         {isLoading ? (
           <div className="py-3 text-xs text-muted text-center">加载中...</div>
         ) : items.length === 0 ? (
           <div className="py-3 text-xs text-muted text-center">暂无交易档案</div>
         ) : (
-          <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+          <div className="space-y-1.5 max-h-[360px] md:max-h-[360px] overflow-y-auto pr-1">
             {items.map((item) => (
-              <div key={item.id} className="rounded-lg border border-white/10 bg-black/20 p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onUseCode(item.stockCode)}
-                    className="text-left min-w-0"
-                    title="填入输入框"
-                  >
-                    <p className="text-xs text-white truncate">{item.stockName || item.stockCode}</p>
-                    <p className="text-[11px] text-muted font-mono">{item.stockCode}</p>
-                  </button>
-                  <div className="flex items-center gap-1">
-                    {item.isFavorite && <span className="text-amber-300 text-xs">★</span>}
-                    <span className={`text-[11px] px-1.5 py-0.5 border rounded ${STATUS_BADGE[item.status]}`}>
-                      {STATUS_LABEL[item.status]}
-                    </span>
+              <div
+                key={item.id}
+                className={`rounded-lg border transition-colors p-2 ${
+                  selectedCodes.has(item.stockCode)
+                    ? 'border-cyan/50 bg-cyan/5'
+                    : 'border-white/10 bg-black/20'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedCodes.has(item.stockCode)}
+                    onChange={() => toggleSelect(item.stockCode)}
+                    className="w-3.5 h-3.5 rounded border-white/20 bg-black/50 text-cyan-500"
+                  />
+                  <div className="flex-1 min-w-0 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => onUseCode(item.stockCode)}
+                      className="text-left min-w-0"
+                      title="填入输入框"
+                    >
+                      <p className="text-xs text-white truncate">{item.stockName || item.stockCode}</p>
+                      <p className="text-[11px] text-muted font-mono">{item.stockCode}</p>
+                    </button>
+                    <div className="flex items-center gap-1">
+                      {item.isFavorite && <span className="text-amber-300 text-xs">★</span>}
+                      <span className={`text-[11px] px-1.5 py-0.5 border rounded ${STATUS_BADGE[item.status]}`}>
+                        {STATUS_LABEL[item.status]}
+                      </span>
+                    </div>
                   </div>
                 </div>
-                <div className="mt-1 text-[11px] text-muted flex items-center gap-2">
-                  <span>买入: {item.buyPrice ?? '--'}</span>
-                  <span>仓位: {item.positionPct ?? '--'}%</span>
+                <div className="mt-1 text-[11px] text-muted flex items-center gap-x-3 gap-y-1 flex-wrap">
+                  <span>买入: <span className="text-secondary">{item.buyPrice ?? '--'}</span></span>
+                  <span>仓位: <span className="text-secondary">{item.positionPct ?? '--'}%</span></span>
+                  {item.targetSellPrice && <span>目标: <span className="text-emerald-300/80">{item.targetSellPrice}</span></span>}
                 </div>
                 <div className="mt-2 flex items-center gap-2">
                   <button
                     type="button"
-                    className="text-[11px] px-2 py-1 rounded border border-cyan/30 text-cyan hover:bg-cyan/15"
+                    className="text-[11px] px-2 py-1 rounded border border-cyan/30 text-cyan hover:bg-cyan/15 flex-1"
                     onClick={() => onUseCode(item.stockCode)}
                   >
                     填入
@@ -112,5 +178,6 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
         )}
       </div>
     </aside>
+
   );
 };

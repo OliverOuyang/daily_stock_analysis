@@ -13,6 +13,7 @@ export interface PortfolioProfile {
   targetSellPrice?: number;
   stopLossPrice?: number;
   tags: string[];
+  actionHistory?: string[];
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -35,6 +36,6 @@ export interface PortfolioUpsertRequest {
   targetSellPrice?: number;
   stopLossPrice?: number;
   tags?: string[];
+  actionHistory?: string[];
   notes?: string;
 }
-
