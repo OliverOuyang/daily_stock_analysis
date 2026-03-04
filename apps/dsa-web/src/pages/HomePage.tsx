@@ -56,6 +56,7 @@ const HomePage: React.FC = () => {
   const [buyPriceInput, setBuyPriceInput] = useState('');
   const [positionPctInput, setPositionPctInput] = useState('');
   const [sharesInput, setSharesInput] = useState('');
+  const [totalInvestmentInput, setTotalInvestmentInput] = useState('');
   const [targetBuyInput, setTargetBuyInput] = useState('');
   const [targetSellInput, setTargetSellInput] = useState('');
   const [stopLossInput, setStopLossInput] = useState('');
@@ -146,6 +147,7 @@ const HomePage: React.FC = () => {
     setBuyPriceInput('');
     setPositionPctInput('');
     setSharesInput('');
+    setTotalInvestmentInput('');
     setTargetBuyInput('');
     setTargetSellInput('');
     setStopLossInput('');
@@ -163,6 +165,7 @@ const HomePage: React.FC = () => {
     setBuyPriceInput(profile.buyPrice === undefined ? '' : String(profile.buyPrice));
     setPositionPctInput(profile.positionPct === undefined ? '' : String(profile.positionPct));
     setSharesInput(profile.shares === undefined ? '' : String(profile.shares));
+    setTotalInvestmentInput(profile.totalInvestment === undefined ? '' : String(profile.totalInvestment));
     setTargetBuyInput(profile.targetBuyPrice === undefined ? '' : String(profile.targetBuyPrice));
     setTargetSellInput(profile.targetSellPrice === undefined ? '' : String(profile.targetSellPrice));
     setStopLossInput(profile.stopLossPrice === undefined ? '' : String(profile.stopLossPrice));
@@ -392,6 +395,7 @@ const HomePage: React.FC = () => {
         buyPrice: toNumber(buyPriceInput),
         positionPct: toNumber(positionPctInput),
         shares: toNumber(sharesInput),
+        totalInvestment: toNumber(totalInvestmentInput),
         targetBuyPrice: toNumber(targetBuyInput),
         targetSellPrice: toNumber(targetSellInput),
         stopLossPrice: toNumber(stopLossInput),
@@ -459,6 +463,12 @@ const HomePage: React.FC = () => {
     const action = `[${new Date().toLocaleString()}] ${newAction.trim()}`;
     setActionHistory((prev) => [action, ...prev]);
     setNewAction('');
+  };
+
+  const removeAction = (index: number) => {
+    const next = [...actionHistory];
+    next.splice(index, 1);
+    setActionHistory(next);
   };
 
   // 回车提交
@@ -603,17 +613,8 @@ const HomePage: React.FC = () => {
                   <input value={sharesInput} onChange={(e) => setSharesInput(e.target.value)} placeholder="0" className="input-terminal py-1.5 px-2 w-full" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-muted block">档案状态</label>
-                  <select
-                    value={profileStatus}
-                    onChange={(e) => setProfileStatus(e.target.value as PortfolioStatus)}
-                    className="input-terminal py-1.5 px-2 w-full"
-                  >
-                    <option value="holding">持仓</option>
-                    <option value="watch">观望</option>
-                    <option value="candidate">候选</option>
-                    <option value="archived">归档</option>
-                  </select>
+                  <label className="text-muted block">计划投入额</label>
+                  <input value={totalInvestmentInput} onChange={(e) => setTotalInvestmentInput(e.target.value)} placeholder="0" className="input-terminal py-1.5 px-2 w-full" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-muted block flex items-center justify-between">
@@ -623,7 +624,7 @@ const HomePage: React.FC = () => {
                         onClick={() => setTargetBuyInput(suggestedValues.targetBuy!.replace(/[^0-9.]/g, ''))}
                         className="text-[10px] text-cyan hover:underline"
                       >
-                        采用建议: {suggestedValues.targetBuy}
+                        建议: {suggestedValues.targetBuy}
                       </button>
                     )}
                   </label>
@@ -642,7 +643,7 @@ const HomePage: React.FC = () => {
                         onClick={() => setTargetSellInput(suggestedValues.targetSell!.replace(/[^0-9.]/g, ''))}
                         className="text-[10px] text-emerald-400 hover:underline"
                       >
-                        采用建议: {suggestedValues.targetSell}
+                        建议: {suggestedValues.targetSell}
                       </button>
                     )}
                   </label>
@@ -661,7 +662,7 @@ const HomePage: React.FC = () => {
                         onClick={() => setStopLossInput(suggestedValues.stopLoss!.replace(/[^0-9.]/g, ''))}
                         className="text-[10px] text-rose-400 hover:underline"
                       >
-                        采用建议: {suggestedValues.stopLoss}
+                        建议: {suggestedValues.stopLoss}
                       </button>
                     )}
                   </label>
@@ -672,19 +673,31 @@ const HomePage: React.FC = () => {
                     className={`input-terminal py-1.5 px-2 w-full ${suggestedValues.stopLoss ? 'border-rose-500/30' : ''}`} 
                   />
                 </div>
-                <div className="flex items-end gap-1.5 pb-0.5">
-                  <label className="input-terminal py-1.5 px-2 inline-flex items-center justify-between gap-2 text-muted cursor-pointer flex-1">
-                    <span>收藏</span>
-                    <input
-                      type="checkbox"
-                      checked={profileFavorite}
-                      onChange={(e) => setProfileFavorite(e.target.checked)}
-                    />
-                  </label>
+                <div className="flex flex-col gap-1.5">
+                   <div className="flex items-center gap-1.5 flex-1">
+                    <select
+                      value={profileStatus}
+                      onChange={(e) => setProfileStatus(e.target.value as PortfolioStatus)}
+                      className="input-terminal py-1.5 px-2 flex-1 text-[11px]"
+                    >
+                      <option value="holding">持仓</option>
+                      <option value="watch">观望</option>
+                      <option value="candidate">候选</option>
+                      <option value="archived">归档</option>
+                    </select>
+                    <label className="input-terminal py-1.5 px-2 inline-flex items-center justify-between gap-2 text-muted cursor-pointer">
+                      <span className="text-[10px]">收藏</span>
+                      <input
+                        type="checkbox"
+                        checked={profileFavorite}
+                        onChange={(e) => setProfileFavorite(e.target.checked)}
+                      />
+                    </label>
+                  </div>
                   <button
                     type="button"
                     onClick={handleSaveTradeProfile}
-                    className="btn-primary py-1.5 px-3 h-[34px] whitespace-nowrap"
+                    className="btn-primary py-1.5 px-3 h-[34px] whitespace-nowrap text-[11px]"
                     disabled={isAnalyzing || !canSaveTradeProfile}
                   >
                     保存档案
@@ -694,12 +707,12 @@ const HomePage: React.FC = () => {
 
               <div className="xl:w-80 flex flex-col gap-2">
                 <div className="space-y-1">
-                  <label className="text-muted text-[11px] block">操作记录 / 个人笔记</label>
+                  <label className="text-muted text-[11px] block">操作记录</label>
                   <div className="flex gap-1.5">
                     <input 
                       value={newAction} 
                       onChange={(e) => setNewAction(e.target.value)} 
-                      placeholder="记录一笔操作，如：卖出半仓 @35" 
+                      placeholder="如：卖出半仓 @35" 
                       className="input-terminal py-1.5 px-2 text-[11px] flex-1"
                       onKeyDown={(e) => e.key === 'Enter' && addAction()}
                     />
@@ -708,14 +721,20 @@ const HomePage: React.FC = () => {
                 </div>
                 <div className="max-h-24 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
                   {actionHistory.map((act, i) => (
-                    <div key={i} className="text-[10px] text-secondary py-1 px-1.5 rounded bg-white/5 border border-white/5">
+                    <div key={i} className="group relative text-[10px] text-secondary py-1 px-1.5 rounded bg-white/5 border border-white/5">
                       {act}
+                      <button 
+                        onClick={() => removeAction(i)}
+                        className="absolute right-1 top-1 hidden group-hover:block text-rose-400 hover:text-rose-300"
+                      >
+                        ×
+                      </button>
                     </div>
                   ))}
                   <textarea
                     value={notesInput}
                     onChange={(e) => setNotesInput(e.target.value)}
-                    placeholder="补充更多笔记..."
+                    placeholder="个人笔记..."
                     rows={2}
                     className="input-terminal py-1.5 px-2 text-[11px] w-full resize-none mt-1"
                   />
@@ -744,7 +763,7 @@ const HomePage: React.FC = () => {
                   className="input-terminal py-1 px-2 w-16 text-[11px]"
                 />
               </div>
-              <p className="text-[10px] text-muted ml-auto italic">提示: 点击自选池股票可快速加载历史分析与档案信息</p>
+              <p className="text-[10px] text-muted ml-auto italic">提示: AI 分析会参考你的操作记录与当前仓位给出补仓/减仓建议</p>
             </div>
           </div>
         </div>
