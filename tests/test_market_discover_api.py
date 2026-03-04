@@ -6,13 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from fastapi.testclient import TestClient
 
 import src.auth as auth
 from api.app import create_app
 from src.config import Config
+from api.v1.endpoints import market as market_endpoint
 
 
 class _FakeTaskQueue:
@@ -49,6 +50,8 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         Config.reset_instance()
         os.environ.pop("ENV_FILE", None)
         os.environ.pop("DATABASE_PATH", None)
+        os.environ.pop("MARKET_DISCOVER_CACHE_TTL_SECONDS", None)
+        market_endpoint._DISCOVER_CACHE.clear()
         self.temp_dir.cleanup()
 
     @patch("api.v1.endpoints.market.get_task_queue")
@@ -80,7 +83,86 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         self.assertEqual(data["sectors"][0]["leaders"][0]["stock_code"], "000933")
         self.assertTrue(data["sectors"][0]["leaders"][0]["task_id"].startswith("task_"))
 
+    @patch("api.v1.endpoints.market.get_task_queue")
+    @patch("api.v1.endpoints.market._discover_hot_sectors")
+    def test_market_discover_uses_cache_to_avoid_refetch_and_retrigger(self, mock_discover, mock_get_queue) -> None:
+        os.environ["MARKET_DISCOVER_CACHE_TTL_SECONDS"] = "1800"
+        mock_discover.return_value = (
+            "akshare",
+            [
+                {
+                    "sector_name": "人工智能",
+                    "change_pct": 1.1,
+                    "leaders": [
+                        {"stock_code": "300308", "stock_name": "中际旭创", "change_pct": 2.2},
+                        {"stock_code": "002230", "stock_name": "科大讯飞", "change_pct": 1.2},
+                    ],
+                }
+            ],
+        )
+        mock_get_queue.return_value = _FakeTaskQueue()
+
+        resp1 = self.client.get("/api/v1/market/discover")
+        self.assertEqual(resp1.status_code, 200)
+        d1 = resp1.json()
+        self.assertEqual(d1["triggered_tasks"], 2)
+
+        resp2 = self.client.get("/api/v1/market/discover")
+        self.assertEqual(resp2.status_code, 200)
+        d2 = resp2.json()
+        self.assertEqual(d2["triggered_tasks"], 0)
+        self.assertEqual(mock_discover.call_count, 1)
+
+    @patch("api.v1.endpoints.market.get_task_queue")
+    @patch("api.v1.endpoints.market._discover_hot_sectors")
+    def test_market_discover_fallback_to_mock_when_upstream_empty(self, mock_discover, mock_get_queue) -> None:
+        mock_discover.return_value = ("akshare", [])
+        mock_get_queue.return_value = _FakeTaskQueue()
+
+        resp = self.client.get("/api/v1/market/discover?trigger_analysis=false")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["source"], "mock_fallback")
+        self.assertGreaterEqual(data["total_sectors"], 1)
+        self.assertGreaterEqual(len(data["sectors"][0]["leaders"]), 2)
+
+    @patch("api.v1.endpoints.market.get_task_queue")
+    @patch("api.v1.endpoints.market._discover_hot_sectors", side_effect=RuntimeError("network down"))
+    def test_market_discover_final_guard_returns_200(self, _mock_discover, mock_get_queue) -> None:
+        mock_get_queue.return_value = _FakeTaskQueue()
+        resp = self.client.get("/api/v1/market/discover?trigger_analysis=false")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["source"], "mock_fallback")
+        self.assertGreaterEqual(data["total_sectors"], 1)
+
+    def test_sector_filter_excludes_st_and_low_market_cap(self) -> None:
+        import pandas as pd
+
+        fake_board = pd.DataFrame([
+            {"板块名称": "有色金属", "涨跌幅": 2.5},
+        ])
+        fake_cons = pd.DataFrame([
+            {"代码": "000001", "名称": "ST测试", "涨跌幅": 5.0, "成交量": 1000, "换手率": 12.0, "总市值": "200亿"},
+            {"代码": "000002", "名称": "大盘龙头A", "涨跌幅": 4.0, "成交量": 8000, "换手率": 10.0, "总市值": "800亿"},
+            {"代码": "000003", "名称": "大盘龙头B", "涨跌幅": 3.0, "成交量": 7000, "换手率": 9.0, "总市值": "500亿"},
+            {"代码": "000004", "名称": "小盘非ST", "涨跌幅": 6.0, "成交量": 9000, "换手率": 15.0, "总市值": "20亿"},
+        ])
+        fake_ak = MagicMock()
+        fake_ak.stock_board_industry_name_em.return_value = fake_board
+        fake_ak.stock_board_industry_cons_em.return_value = fake_cons
+
+        with patch.dict("sys.modules", {"akshare": fake_ak}):
+            source, sectors = market_endpoint._discover_hot_sectors(top_n=1, leaders_per_sector=2)
+
+        self.assertEqual(source, "akshare_em")
+        self.assertEqual(len(sectors), 1)
+        leaders = sectors[0]["leaders"]
+        self.assertEqual(len(leaders), 2)
+        names = {x["stock_name"] for x in leaders}
+        self.assertNotIn("ST测试", names)
+        self.assertNotIn("小盘非ST", names)
+
 
 if __name__ == "__main__":
     unittest.main()
-

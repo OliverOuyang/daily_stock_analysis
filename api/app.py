@@ -16,6 +16,8 @@ FastAPI 应用工厂模块
 """
 
 import os
+import threading
+import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -32,14 +34,44 @@ from api.middlewares.error_handler import add_error_handlers
 from api.v1.schemas.common import HealthResponse
 from src.services.system_config_service import SystemConfigService
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     """Initialize and release shared services for the app lifecycle."""
     app.state.system_config_service = SystemConfigService()
+    scheduler = None
+    scheduler_thread = None
+
+    # Optional background cron: market discover scan at 10:30 / 14:30 (Mon-Fri)
+    cron_enabled = os.getenv("MARKET_DISCOVER_CRON_ENABLED", "false").lower() == "true"
+    if cron_enabled:
+        try:
+            from src.scheduler import Scheduler, build_market_discover_scan_task
+
+            scheduler = Scheduler(schedule_time="10:30")
+            market_scan_task = build_market_discover_scan_task(top_n=5, leaders_per_sector=3)
+            scheduler.set_weekday_tasks(
+                tasks=[
+                    ("10:30", market_scan_task, "market_discover_scan_1030"),
+                    ("14:30", market_scan_task, "market_discover_scan_1430"),
+                ],
+                run_immediately=False,
+            )
+            scheduler_thread = threading.Thread(target=scheduler.run, daemon=True, name="market-discover-cron")
+            scheduler_thread.start()
+            logger.info("已启动市场发现后台定时扫描任务（Mon-Fri 10:30/14:30）")
+        except Exception as e:
+            logger.warning("启动市场发现后台定时扫描失败: %s", e)
+
     try:
         yield
     finally:
+        if scheduler is not None:
+            scheduler.stop()
+        if scheduler_thread is not None and scheduler_thread.is_alive():
+            scheduler_thread.join(timeout=1.0)
         if hasattr(app.state, "system_config_service"):
             delattr(app.state, "system_config_service")
 

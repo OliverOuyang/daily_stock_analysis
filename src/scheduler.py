@@ -19,7 +19,7 @@ import sys
 import time
 import threading
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, Optional, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -104,18 +104,55 @@ class Scheduler:
         """安全执行任务（带异常捕获）"""
         if self._task_callback is None:
             return
-        
+
+        self._safe_run_named_task(self._task_callback, "daily_task")
+
+    def _safe_run_named_task(self, task: Callable, task_name: str):
+        """安全执行指定任务（带异常捕获）"""
         try:
             logger.info("=" * 50)
-            logger.info(f"定时任务开始执行 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(
+                "定时任务开始执行 [%s] - %s",
+                task_name,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            )
             logger.info("=" * 50)
-            
-            self._task_callback()
-            
-            logger.info(f"定时任务执行完成 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            
+
+            task()
+
+            logger.info(
+                "定时任务执行完成 [%s] - %s",
+                task_name,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            )
+
         except Exception as e:
-            logger.exception(f"定时任务执行失败: {e}")
+            logger.exception("定时任务执行失败 [%s]: %s", task_name, e)
+
+    def set_weekday_tasks(self, tasks: List[Tuple[str, Callable, str]], run_immediately: bool = False):
+        """
+        设置工作日定时任务（周一到周五）
+
+        Args:
+            tasks: [(time_str, callback, task_name), ...]
+            run_immediately: 是否启动后立即执行一次
+        """
+        weekdays = [
+            self.schedule.every().monday,
+            self.schedule.every().tuesday,
+            self.schedule.every().wednesday,
+            self.schedule.every().thursday,
+            self.schedule.every().friday,
+        ]
+
+        for time_str, callback, task_name in tasks:
+            for day in weekdays:
+                day.at(time_str).do(self._safe_run_named_task, callback, task_name)
+            logger.info("已设置工作日定时任务 [%s]，执行时间: %s", task_name, time_str)
+
+        if run_immediately:
+            for _, callback, task_name in tasks:
+                self._safe_run_named_task(callback, task_name)
     
     def run(self):
         """
@@ -165,6 +202,57 @@ def run_with_schedule(
     """
     scheduler = Scheduler(schedule_time=schedule_time)
     scheduler.set_daily_task(task, run_immediately=run_immediately)
+    scheduler.run()
+
+
+def build_market_discover_scan_task(top_n: int = 5, leaders_per_sector: int = 3) -> Callable:
+    """
+    构造市场发现扫描任务。
+
+    扫描逻辑：
+    1. 发现热点板块和龙头
+    2. 为龙头自动触发 simple 分析任务
+    """
+
+    def _task() -> None:
+        from api.v1.endpoints.market import run_market_discover_scan
+
+        result = run_market_discover_scan(
+            top_n=top_n,
+            leaders_per_sector=leaders_per_sector,
+            trigger_analysis=True,
+            use_cache=False,  # 定时扫描应强制拉取最新结果
+        )
+        logger.info(
+            "市场扫描完成: source=%s, sectors=%s, triggered=%s, duplicate=%s",
+            result.source,
+            result.total_sectors,
+            result.triggered_tasks,
+            result.duplicate_tasks,
+        )
+
+    return _task
+
+
+def run_market_discover_schedule(
+    run_immediately: bool = False,
+    top_n: int = 5,
+    leaders_per_sector: int = 3,
+):
+    """
+    启动市场发现定时扫描：
+    - 每个交易日（周一至周五）10:30
+    - 每个交易日（周一至周五）14:30
+    """
+    scheduler = Scheduler(schedule_time="10:30")
+    task = build_market_discover_scan_task(top_n=top_n, leaders_per_sector=leaders_per_sector)
+    scheduler.set_weekday_tasks(
+        tasks=[
+            ("10:30", task, "market_discover_scan_1030"),
+            ("14:30", task, "market_discover_scan_1430"),
+        ],
+        run_immediately=run_immediately,
+    )
     scheduler.run()
 
 

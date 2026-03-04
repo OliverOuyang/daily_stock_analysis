@@ -12,6 +12,10 @@ GET /api/v1/market/discover
 from __future__ import annotations
 
 import logging
+import os
+import re
+import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query
@@ -24,6 +28,43 @@ from src.services.task_queue import DuplicateTaskError, get_task_queue
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Cache TTL defaults to 20 minutes.
+_MARKET_DISCOVER_CACHE_TTL_SECONDS = int(os.getenv("MARKET_DISCOVER_CACHE_TTL_SECONDS", "1200"))
+_MIN_MARKET_CAP_BILLION = float(os.getenv("MARKET_DISCOVER_MIN_MARKET_CAP_BILLION", "30"))
+_CACHE_LOCK = threading.Lock()
+_DISCOVER_CACHE: Dict[Tuple[int, int], Dict[str, Any]] = {}
+
+
+_MOCK_HOT_SECTORS: List[Dict[str, Any]] = [
+    {
+        "sector_name": "人工智能",
+        "change_pct": 1.8,
+        "leaders": [
+            {"stock_code": "300308", "stock_name": "中际旭创", "change_pct": 2.4},
+            {"stock_code": "002230", "stock_name": "科大讯飞", "change_pct": 1.6},
+            {"stock_code": "688111", "stock_name": "金山办公", "change_pct": 1.3},
+        ],
+    },
+    {
+        "sector_name": "半导体",
+        "change_pct": 1.5,
+        "leaders": [
+            {"stock_code": "688981", "stock_name": "中芯国际", "change_pct": 2.0},
+            {"stock_code": "603986", "stock_name": "兆易创新", "change_pct": 1.4},
+            {"stock_code": "300474", "stock_name": "景嘉微", "change_pct": 1.1},
+        ],
+    },
+    {
+        "sector_name": "高股息",
+        "change_pct": 0.9,
+        "leaders": [
+            {"stock_code": "600941", "stock_name": "中国移动", "change_pct": 0.8},
+            {"stock_code": "601398", "stock_name": "工商银行", "change_pct": 0.5},
+            {"stock_code": "600900", "stock_name": "长江电力", "change_pct": 0.6},
+        ],
+    },
+]
 
 
 def _get_col(row: Dict[str, Any], names: List[str]) -> Any:
@@ -42,65 +83,342 @@ def _to_float(v: Any) -> Optional[float]:
         return None
 
 
+def _to_market_cap_billion(v: Any) -> Optional[float]:
+    """Normalize market cap into billion CNY (亿元)."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        num = float(v)
+    else:
+        s = str(v).strip().replace(",", "")
+        if not s:
+            return None
+        # Handle textual units from data sources.
+        if "万亿" in s:
+            m = re.search(r"[-+]?\d*\.?\d+", s)
+            return float(m.group()) * 10000 if m else None
+        if "亿" in s:
+            m = re.search(r"[-+]?\d*\.?\d+", s)
+            return float(m.group()) if m else None
+        m = re.search(r"[-+]?\d*\.?\d+", s)
+        if not m:
+            return None
+        num = float(m.group())
+
+    # Heuristic:
+    # - very large numbers are likely yuan -> convert to 亿元
+    # - small numbers are likely already in 亿元
+    if num >= 1e8:
+        return num / 1e8
+    return num
+
+
+def _build_mock_hot_sectors(top_n: int, leaders_per_sector: int) -> List[Dict[str, Any]]:
+    take_n = max(2, leaders_per_sector)
+    sectors = []
+    for sec in _MOCK_HOT_SECTORS[:top_n]:
+        sectors.append({
+            "sector_name": sec["sector_name"],
+            "change_pct": sec["change_pct"],
+            "leaders": sec["leaders"][:take_n],
+        })
+    return sectors
+
+
+def _cache_key(top_n: int, leaders_per_sector: int) -> Tuple[int, int]:
+    return top_n, leaders_per_sector
+
+
+def _get_cached_discover_result(key: Tuple[int, int], ttl_seconds: int) -> Optional[Dict[str, Any]]:
+    now = time.time()
+    with _CACHE_LOCK:
+        item = _DISCOVER_CACHE.get(key)
+        if not item:
+            return None
+        if now - item["ts"] > ttl_seconds:
+            _DISCOVER_CACHE.pop(key, None)
+            return None
+        # Return shallow copy to avoid accidental mutation.
+        return {
+            "source": item["source"],
+            "sectors": [dict(x) for x in item["sectors"]],
+            "analysis_triggered": bool(item.get("analysis_triggered", False)),
+        }
+
+
+def _set_cached_discover_result(
+    key: Tuple[int, int],
+    source: str,
+    sectors: List[Dict[str, Any]],
+    analysis_triggered: bool = False,
+) -> None:
+    with _CACHE_LOCK:
+        _DISCOVER_CACHE[key] = {
+            "ts": time.time(),
+            "source": source,
+            "sectors": [dict(x) for x in sectors],
+            "analysis_triggered": analysis_triggered,
+        }
+
+
+def _mark_cached_analysis_triggered(key: Tuple[int, int]) -> None:
+    with _CACHE_LOCK:
+        item = _DISCOVER_CACHE.get(key)
+        if item:
+            item["analysis_triggered"] = True
+
+
 def _discover_hot_sectors(top_n: int, leaders_per_sector: int) -> Tuple[str, List[Dict[str, Any]]]:
     """
     使用 Akshare 获取热门行业与龙头股。
     返回 (source, sectors)
-    sectors: [{sector_name, change_pct, leaders:[{stock_code, stock_name, change_pct}]}]
     """
     import pandas as pd  # noqa: F401
     import akshare as ak
 
-    board_df = ak.stock_board_industry_name_em()
-    if board_df is None or board_df.empty:
-        return "akshare", []
+    # 临时禁用代理，防止 Akshare 访问国内接口失败 (如常见的 ProxyError)
+    old_http_proxy = os.environ.get("http_proxy")
+    old_https_proxy = os.environ.get("https_proxy")
+    if old_http_proxy: os.environ["http_proxy"] = ""
+    if old_https_proxy: os.environ["https_proxy"] = ""
 
-    change_col = "涨跌幅" if "涨跌幅" in board_df.columns else None
-    if change_col is None:
-        return "akshare", []
-
-    board_df[change_col] = board_df[change_col].astype(float)
-    board_df = board_df.sort_values(change_col, ascending=False).head(top_n)
-
-    sectors: List[Dict[str, Any]] = []
-    for _, row in board_df.iterrows():
-        sector_name = str(row.get("板块名称") or row.get("名称") or "").strip()
-        if not sector_name:
-            continue
-
-        leaders: List[Dict[str, Any]] = []
+    try:
+        source = "akshare_em"
+        board_df = None
+        
+        # 尝试多源获取板块排行
         try:
-            cons_df = ak.stock_board_industry_cons_em(symbol=sector_name)
-            if cons_df is not None and not cons_df.empty:
-                cand_df = cons_df.copy()
-                leader_change_col = "涨跌幅" if "涨跌幅" in cand_df.columns else None
-                if leader_change_col:
-                    cand_df[leader_change_col] = cand_df[leader_change_col].astype(float)
-                    cand_df = cand_df.sort_values(leader_change_col, ascending=False)
-                cand_df = cand_df.head(leaders_per_sector)
-
-                for _, r in cand_df.iterrows():
-                    r_dict = r.to_dict()
-                    code_raw = _get_col(r_dict, ["代码", "股票代码", "symbol"])
-                    name = _get_col(r_dict, ["名称", "股票名称", "name"])
-                    if not code_raw:
-                        continue
-                    code = canonical_stock_code(str(code_raw))
-                    leaders.append({
-                        "stock_code": code,
-                        "stock_name": str(name) if name else None,
-                        "change_pct": _to_float(_get_col(r_dict, ["涨跌幅", "change_pct"])),
-                    })
+            board_df = ak.stock_board_industry_name_em()
         except Exception as e:
-            logger.warning("获取板块成分失败 %s: %s", sector_name, e)
+            logger.warning("Akshare 东财板块排行接口失败: %s, 尝试新浪接口...", e)
+            try:
+                board_df = ak.stock_sector_spot(indicator="新浪行业")
+                source = "akshare_sina"
+            except Exception as e2:
+                logger.error("Akshare 新浪板块排行接口也失败: %s", e2)
 
-        sectors.append({
-            "sector_name": sector_name,
-            "change_pct": _to_float(row.get(change_col)),
-            "leaders": leaders,
-        })
+        if board_df is None or board_df.empty:
+            return source, []
 
-    return "akshare", sectors
+        # 统一字段名识别
+        name_col = None
+        for col in ["板块名称", "名称", "板块", "label", "name"]:
+            if col in board_df.columns:
+                name_col = col
+                break
+        
+        change_col = None
+        for col in ["涨跌幅", "涨跌", "change_pct", "百分比", "涨幅"]:
+            if col in board_df.columns:
+                change_col = col
+                break
+
+        if not name_col or not change_col:
+            logger.error("无法识别板块接口列名: %s", board_df.columns.tolist())
+            return source, []
+
+        board_df[change_col] = pd.to_numeric(board_df[change_col], errors='coerce')
+        board_df = board_df.dropna(subset=[change_col])
+        board_df = board_df.sort_values(change_col, ascending=False).head(top_n)
+
+        sectors: List[Dict[str, Any]] = []
+        for _, row in board_df.iterrows():
+            sector_name = str(row.get(name_col) or "").strip()
+            if not sector_name:
+                continue
+
+            leaders: List[Dict[str, Any]] = []
+            # 尝试获取龙头
+            try:
+                cons_df = None
+                if source == "akshare_em":
+                    cons_df = ak.stock_board_industry_cons_em(symbol=sector_name)
+                else:
+                    cons_df = ak.stock_sector_detail(sector=sector_name)
+                
+                if cons_df is not None and not cons_df.empty:
+                    cand_df = cons_df.copy()
+
+                    leader_name_col = None
+                    for c in ["名称", "股票名称", "name"]:
+                        if c in cand_df.columns:
+                            leader_name_col = c
+                            break
+                    if leader_name_col:
+                        # 排除 ST/*ST
+                        cand_df = cand_df[~cand_df[leader_name_col].astype(str).str.contains(r"(?:\*?ST)", regex=True, na=False)]
+
+                    change_col = None
+                    for c in ["涨跌幅", "涨跌", "change_pct", "涨幅"]:
+                        if c in cand_df.columns:
+                            change_col = c
+                            break
+                    volume_col = None
+                    for c in ["成交量", "volume", "成交量(手)", "量比成交量"]:
+                        if c in cand_df.columns:
+                            volume_col = c
+                            break
+                    turnover_col = None
+                    for c in ["换手率", "turnover_rate", "换手", "换手率(%)"]:
+                        if c in cand_df.columns:
+                            turnover_col = c
+                            break
+                    market_cap_col = None
+                    for c in ["总市值", "total_mv", "总市值(元)", "流通市值"]:
+                        if c in cand_df.columns:
+                            market_cap_col = c
+                            break
+
+                    cand_df["__change"] = pd.to_numeric(cand_df[change_col], errors="coerce") if change_col else None
+                    cand_df["__volume"] = pd.to_numeric(cand_df[volume_col], errors="coerce") if volume_col else None
+                    cand_df["__turnover"] = pd.to_numeric(cand_df[turnover_col], errors="coerce") if turnover_col else None
+                    if market_cap_col:
+                        cand_df["__market_cap_b"] = cand_df[market_cap_col].apply(_to_market_cap_billion)
+                        # 市值可用时，过滤掉 30 亿以下微盘股
+                        cand_df = cand_df[
+                            cand_df["__market_cap_b"].isna() | (cand_df["__market_cap_b"] >= _MIN_MARKET_CAP_BILLION)
+                        ]
+
+                    # 若存在换手率，优先保留前 50% 活跃票；否则尝试市值前 50%
+                    take_n = max(2, leaders_per_sector)
+                    original_candidates = cand_df.copy()
+                    turnover_series = cand_df.get("__turnover")
+                    if turnover_series is not None and turnover_series.notna().sum() >= take_n:
+                        threshold = turnover_series.dropna().quantile(0.5)
+                        cand_df = cand_df[cand_df["__turnover"] >= threshold]
+                    else:
+                        cap_series = cand_df.get("__market_cap_b")
+                        if cap_series is not None and cap_series.notna().sum() >= take_n:
+                            threshold = cap_series.dropna().quantile(0.5)
+                            cand_df = cand_df[cand_df["__market_cap_b"] >= threshold]
+
+                    if len(cand_df) < take_n:
+                        cand_df = original_candidates
+
+                    sort_cols: List[str] = []
+                    ascending: List[bool] = []
+                    if "__volume" in cand_df.columns:
+                        sort_cols.append("__volume")
+                        ascending.append(False)
+                    if "__turnover" in cand_df.columns:
+                        sort_cols.append("__turnover")
+                        ascending.append(False)
+                    if "__change" in cand_df.columns:
+                        sort_cols.append("__change")
+                        ascending.append(False)
+                    if sort_cols:
+                        cand_df = cand_df.sort_values(sort_cols, ascending=ascending, na_position="last")
+
+                    cand_df = cand_df.head(take_n)
+                    for _, r in cand_df.iterrows():
+                        r_dict = r.to_dict()
+                        code_raw = _get_col(r_dict, ["代码", "股票代码", "symbol", "code"])
+                        name = _get_col(r_dict, ["名称", "股票名称", "name", leader_name_col or ""])
+                        if not code_raw:
+                            continue
+                        code = canonical_stock_code(str(code_raw))
+                        leaders.append({
+                            "stock_code": code,
+                            "stock_name": str(name) if name else None,
+                            "change_pct": _to_float(_get_col(r_dict, ["涨跌幅", "change_pct", "涨幅"])),
+                        })
+            except Exception as e:
+                logger.warning("获取板块成分失败 %s: %s", sector_name, e)
+
+            sectors.append({
+                "sector_name": sector_name,
+                "change_pct": _to_float(row.get(change_col)),
+                "leaders": leaders,
+            })
+
+        return source, sectors
+    finally:
+        # 还原代理设置
+        if old_http_proxy is not None: os.environ["http_proxy"] = old_http_proxy
+        if old_https_proxy is not None: os.environ["https_proxy"] = old_https_proxy
+
+
+def run_market_discover_scan(
+    top_n: int,
+    leaders_per_sector: int,
+    trigger_analysis: bool,
+    use_cache: bool = True,
+) -> MarketDiscoverResponse:
+    """Core discover+trigger logic for API and scheduler reuse."""
+    cache_key = _cache_key(top_n, leaders_per_sector)
+    source = "akshare_em"
+    sectors_raw: List[Dict[str, Any]] = []
+    analysis_triggered_on_cache = False
+
+    if use_cache:
+        cached = _get_cached_discover_result(cache_key, _MARKET_DISCOVER_CACHE_TTL_SECONDS)
+        if cached:
+            source = cached["source"]
+            sectors_raw = cached["sectors"]
+            analysis_triggered_on_cache = bool(cached["analysis_triggered"])
+            logger.debug("Market discover cache hit: top_n=%s leaders=%s", top_n, leaders_per_sector)
+
+    if not sectors_raw:
+        try:
+            source, sectors_raw = _discover_hot_sectors(top_n=top_n, leaders_per_sector=leaders_per_sector)
+        except Exception as e:
+            logger.warning("市场扫描上游数据源失败，启用 mock 兜底: %s", e)
+            source, sectors_raw = "mock_fallback", []
+
+        if not sectors_raw:
+            source = "mock_fallback"
+            sectors_raw = _build_mock_hot_sectors(top_n=top_n, leaders_per_sector=leaders_per_sector)
+        if use_cache:
+            _set_cached_discover_result(cache_key, source, sectors_raw, analysis_triggered=False)
+
+    task_queue = get_task_queue()
+    triggered_tasks = 0
+    duplicate_tasks = 0
+
+    should_trigger_analysis = trigger_analysis and (not use_cache or not analysis_triggered_on_cache)
+    sectors: List[SectorDiscoverItem] = []
+    for sec in sectors_raw:
+        leaders: List[MarketLeader] = []
+        for leader in sec.get("leaders", []):
+            task_id: Optional[str] = None
+            if should_trigger_analysis:
+                try:
+                    task = task_queue.submit_task(
+                        stock_code=leader["stock_code"],
+                        stock_name=leader.get("stock_name"),
+                        report_type="simple",
+                        force_refresh=False,
+                    )
+                    task_id = task.task_id
+                    triggered_tasks += 1
+                except DuplicateTaskError:
+                    duplicate_tasks += 1
+                except Exception as e:
+                    logger.warning("自动触发 simple 分析失败 %s: %s", leader.get("stock_code"), e)
+
+            leaders.append(MarketLeader(
+                stock_code=leader["stock_code"],
+                stock_name=leader.get("stock_name"),
+                change_pct=leader.get("change_pct"),
+                task_id=task_id,
+            ))
+
+        sectors.append(SectorDiscoverItem(
+            sector_name=sec.get("sector_name", ""),
+            change_pct=sec.get("change_pct"),
+            leaders=leaders,
+        ))
+
+    if should_trigger_analysis and use_cache:
+        _mark_cached_analysis_triggered(cache_key)
+
+    return MarketDiscoverResponse(
+        source=source,
+        total_sectors=len(sectors),
+        triggered_tasks=triggered_tasks,
+        duplicate_tasks=duplicate_tasks,
+        sectors=sectors,
+    )
 
 
 @router.get(
@@ -115,54 +433,28 @@ def discover_market(
     trigger_analysis: bool = Query(True, description="是否自动触发 simple 分析"),
 ) -> MarketDiscoverResponse:
     try:
-        source, sectors_raw = _discover_hot_sectors(top_n=top_n, leaders_per_sector=leaders_per_sector)
-        task_queue = get_task_queue()
-        triggered_tasks = 0
-        duplicate_tasks = 0
-
-        sectors: List[SectorDiscoverItem] = []
-        for sec in sectors_raw:
-            leaders: List[MarketLeader] = []
-            for leader in sec.get("leaders", []):
-                task_id: Optional[str] = None
-                if trigger_analysis:
-                    try:
-                        task = task_queue.submit_task(
-                            stock_code=leader["stock_code"],
-                            stock_name=leader.get("stock_name"),
-                            report_type="simple",
-                            force_refresh=False,
-                        )
-                        task_id = task.task_id
-                        triggered_tasks += 1
-                    except DuplicateTaskError:
-                        duplicate_tasks += 1
-                    except Exception as e:
-                        logger.warning("自动触发 simple 分析失败 %s: %s", leader.get("stock_code"), e)
-
-                leaders.append(MarketLeader(
-                    stock_code=leader["stock_code"],
-                    stock_name=leader.get("stock_name"),
-                    change_pct=leader.get("change_pct"),
-                    task_id=task_id,
-                ))
-
-            sectors.append(SectorDiscoverItem(
-                sector_name=sec.get("sector_name", ""),
-                change_pct=sec.get("change_pct"),
-                leaders=leaders,
-            ))
-
-        return MarketDiscoverResponse(
-            source=source,
-            total_sectors=len(sectors),
-            triggered_tasks=triggered_tasks,
-            duplicate_tasks=duplicate_tasks,
-            sectors=sectors,
+        return run_market_discover_scan(
+            top_n=top_n,
+            leaders_per_sector=leaders_per_sector,
+            trigger_analysis=trigger_analysis,
+            use_cache=True,
         )
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("市场发现失败: %s", e, exc_info=True)
-        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": "市场发现失败"})
-
+        # Final guard rail: return mock fallback instead of 500 to keep UI stable.
+        logger.error("市场发现失败（最终兜底）: %s", e, exc_info=True)
+        return MarketDiscoverResponse(
+            source="mock_fallback",
+            total_sectors=3,
+            triggered_tasks=0,
+            duplicate_tasks=0,
+            sectors=[
+                SectorDiscoverItem(
+                    sector_name=x["sector_name"],
+                    change_pct=x["change_pct"],
+                    leaders=[MarketLeader(**leader) for leader in x["leaders"][:2]],
+                )
+                for x in _MOCK_HOT_SECTORS
+            ],
+        )

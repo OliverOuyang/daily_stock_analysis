@@ -10,6 +10,7 @@
 """
 
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
@@ -25,9 +26,44 @@ class StockService:
     封装股票数据获取的业务逻辑
     """
     
+    _FAILOVER_THRESHOLD = 2
+    _fallback_lock = threading.Lock()
+    _consecutive_failures: Dict[str, int] = {}
+
     def __init__(self):
         """初始化股票数据服务"""
         self.repo = StockRepository()
+
+    @classmethod
+    def _record_fetch_result(cls, stock_code: str, success: bool) -> int:
+        with cls._fallback_lock:
+            if success:
+                cls._consecutive_failures.pop(stock_code, None)
+                return 0
+            failures = cls._consecutive_failures.get(stock_code, 0) + 1
+            cls._consecutive_failures[stock_code] = failures
+            return failures
+
+    @classmethod
+    def _should_force_fallback(cls, stock_code: str) -> bool:
+        with cls._fallback_lock:
+            return cls._consecutive_failures.get(stock_code, 0) >= cls._FAILOVER_THRESHOLD
+
+    def _format_quote(self, stock_code: str, quote: Any) -> Dict[str, Any]:
+        return {
+            "stock_code": getattr(quote, "code", stock_code),
+            "stock_name": getattr(quote, "name", None),
+            "current_price": getattr(quote, "price", 0.0) or 0.0,
+            "change": getattr(quote, "change_amount", None),
+            "change_percent": getattr(quote, "change_pct", None),
+            "open": getattr(quote, "open_price", None),
+            "high": getattr(quote, "high", None),
+            "low": getattr(quote, "low", None),
+            "prev_close": getattr(quote, "pre_close", None),
+            "volume": getattr(quote, "volume", None),
+            "amount": getattr(quote, "amount", None),
+            "update_time": datetime.now().isoformat(),
+        }
     
     def get_realtime_quote(self, stock_code: str) -> Optional[Dict[str, Any]]:
         """
@@ -40,30 +76,44 @@ class StockService:
             实时行情数据字典
         """
         try:
-            # 调用数据获取器获取实时行情
             from data_provider.base import DataFetcherManager
-            
+            from src.config import get_config
+
             manager = DataFetcherManager()
             quote = manager.get_realtime_quote(stock_code)
-            
-            if quote is None:
-                logger.warning(f"获取 {stock_code} 实时行情失败")
-                return None
-            
-            return {
-                "stock_code": getattr(quote, "code", stock_code),
-                "stock_name": getattr(quote, "name", None),
-                "current_price": getattr(quote, "price", 0.0) or 0.0,
-                "change": getattr(quote, "change_amount", None),
-                "change_percent": getattr(quote, "change_pct", None),
-                "open": getattr(quote, "open_price", None),
-                "high": getattr(quote, "high", None),
-                "low": getattr(quote, "low", None),
-                "prev_close": getattr(quote, "pre_close", None),
-                "volume": getattr(quote, "volume", None),
-                "amount": getattr(quote, "amount", None),
-                "update_time": datetime.now().isoformat(),
-            }
+            if quote is not None:
+                self._record_fetch_result(stock_code, success=True)
+                return self._format_quote(stock_code, quote)
+
+            failures = self._record_fetch_result(stock_code, success=False)
+            logger.warning("获取 %s 实时行情失败（连续失败=%s）", stock_code, failures)
+
+            # 连续失败后，临时扩展优先级，强制尝试 efinance/akshare_* 切换
+            # 通过 try/finally 确保不污染全局配置。
+            if self._should_force_fallback(stock_code):
+                config = get_config()
+                old_priority = getattr(config, "realtime_source_priority", "")
+                fallback_chain = "efinance,akshare_em,akshare_sina,tencent,tushare"
+                if old_priority:
+                    merged = [x.strip() for x in (old_priority + "," + fallback_chain).split(",") if x.strip()]
+                    seen = set()
+                    merged = [x for x in merged if not (x in seen or seen.add(x))]
+                    force_priority = ",".join(merged)
+                else:
+                    force_priority = fallback_chain
+
+                try:
+                    config.realtime_source_priority = force_priority
+                    manager = DataFetcherManager()
+                    retry_quote = manager.get_realtime_quote(stock_code)
+                    if retry_quote is not None:
+                        self._record_fetch_result(stock_code, success=True)
+                        logger.info("连续失败后切源重试成功: %s", stock_code)
+                        return self._format_quote(stock_code, retry_quote)
+                finally:
+                    config.realtime_source_priority = old_priority
+
+            return None
             
         except ImportError:
             logger.warning("DataFetcherManager 未找到，使用占位数据")
@@ -74,14 +124,28 @@ class StockService:
 
     def batch_get_realtime_quotes(self, stock_codes: List[str]) -> List[Dict[str, Any]]:
         """
-        批量获取股票实时行情
+        批量获取股票实时行情 - 使用多线程并行加速
         """
+        import concurrent.futures
+        
         results = []
-        # 注意：这里可以使用多线程加速，但为了安全先串行或利用 DataFetcherManager 内部机制
-        for code in stock_codes:
-            quote = self.get_realtime_quote(code)
-            if quote:
-                results.append(quote)
+        # 使用线程池并行获取行情，提高自选池刷新速度
+        # 限制最大线程数为 10，避免触发 API 频控
+        max_workers = min(len(stock_codes), 10) if stock_codes else 1
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_code = {executor.submit(self.get_realtime_quote, code): code for code in stock_codes}
+            
+            for future in concurrent.futures.as_completed(future_to_code):
+                try:
+                    quote = future.result()
+                    if quote:
+                        results.append(quote)
+                except Exception as e:
+                    code = future_to_code[future]
+                    logger.error(f"批量获取 {code} 行情异常: {e}")
+                    
         return results
     
     def get_history_data(
