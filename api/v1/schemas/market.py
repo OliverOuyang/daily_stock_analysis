@@ -10,6 +10,7 @@ class MarketLeader(BaseModel):
     stock_code: str
     stock_name: Optional[str] = None
     change_pct: Optional[float] = None
+    latest_score: Optional[int] = Field(None, description="历史最近一次情绪评分")
     task_id: Optional[str] = Field(None, description="自动触发分析时返回的任务ID")
 
 
@@ -25,4 +26,3 @@ class MarketDiscoverResponse(BaseModel):
     triggered_tasks: int
     duplicate_tasks: int
     sectors: List[SectorDiscoverItem]
-

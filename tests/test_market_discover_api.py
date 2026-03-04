@@ -83,6 +83,40 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         self.assertEqual(data["sectors"][0]["leaders"][0]["stock_code"], "000933")
         self.assertTrue(data["sectors"][0]["leaders"][0]["task_id"].startswith("task_"))
 
+    @patch("api.v1.endpoints.market.get_db")
+    @patch("api.v1.endpoints.market.get_task_queue")
+    @patch("api.v1.endpoints.market._discover_hot_sectors")
+    def test_market_discover_min_score_filters_leaders(self, mock_discover, mock_get_queue, mock_get_db) -> None:
+        mock_discover.return_value = (
+            "akshare",
+            [
+                {
+                    "sector_name": "有色金属",
+                    "change_pct": 2.3,
+                    "leaders": [
+                        {"stock_code": "000933", "stock_name": "神火股份", "change_pct": 5.1},
+                        {"stock_code": "601899", "stock_name": "紫金矿业", "change_pct": 3.2},
+                    ],
+                }
+            ],
+        )
+        fake_db = MagicMock()
+        fake_db.get_latest_sentiment_scores.return_value = {
+            "000933": {"sentiment_score": 82},
+            "601899": {"sentiment_score": 68},
+        }
+        mock_get_db.return_value = fake_db
+        mock_get_queue.return_value = _FakeTaskQueue()
+
+        resp = self.client.get("/api/v1/market/discover?trigger_analysis=false&min_score=70")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["total_sectors"], 1)
+        leaders = data["sectors"][0]["leaders"]
+        self.assertEqual(len(leaders), 1)
+        self.assertEqual(leaders[0]["stock_code"], "000933")
+        self.assertEqual(leaders[0]["latest_score"], 82)
+
     @patch("api.v1.endpoints.market.get_task_queue")
     @patch("api.v1.endpoints.market._discover_hot_sectors")
     def test_market_discover_uses_cache_to_avoid_refetch_and_retrigger(self, mock_discover, mock_get_queue) -> None:

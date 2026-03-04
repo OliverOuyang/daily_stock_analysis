@@ -41,6 +41,7 @@ _THINKING_TOOL_LABELS: Dict[str, str] = {
     "analyze_pattern": "K线形态识别",
     "get_volume_analysis": "量能分析",
     "calculate_ma": "均线计算",
+    "portfolio_review": "资产组合诊断",
 }
 
 
@@ -224,6 +225,13 @@ AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析 
 """
 
 CHAT_SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析 Agent，拥有数据工具和交易策略，负责解答用户的股票投资问题。
+
+## 资产组合诊断规则（必须遵守）
+
+当用户问题包含 `PORTFOLIO` / `组合` / `总仓位` / `资产配置` 语义时：
+- 必须先调用 `portfolio_review`
+- 将用户提供的可用现金作为 `available_cash` 传入（未提供则用 0）
+- 先输出组合层结论，再给出个股层动作建议（补仓/减仓）
 
 ## 分析工作流程（必须严格按阶段执行，禁止跳步或合并阶段）
 

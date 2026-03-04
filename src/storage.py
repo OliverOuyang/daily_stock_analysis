@@ -914,6 +914,66 @@ class DatabaseManager:
             ).scalars().all()
 
             return list(results)
+
+    def get_latest_sentiment_scores(
+        self,
+        stock_codes: List[str],
+        days: int = 30,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        批量获取每只股票最近一次分析评分（含操作建议与时间）。
+
+        Args:
+            stock_codes: 股票代码列表
+            days: 仅查询最近 N 天数据
+
+        Returns:
+            {code: {"sentiment_score": int|None, "operation_advice": str|None, "created_at": str|None}}
+        """
+        from sqlalchemy import func
+
+        codes = [str(c).strip().upper() for c in stock_codes if c and str(c).strip()]
+        if not codes:
+            return {}
+
+        cutoff_date = datetime.now() - timedelta(days=days)
+
+        with self.get_session() as session:
+            latest_subq = (
+                select(
+                    AnalysisHistory.code.label("code"),
+                    func.max(AnalysisHistory.created_at).label("latest_created_at"),
+                )
+                .where(
+                    and_(
+                        AnalysisHistory.code.in_(codes),
+                        AnalysisHistory.created_at >= cutoff_date,
+                    )
+                )
+                .group_by(AnalysisHistory.code)
+                .subquery()
+            )
+
+            rows = session.execute(
+                select(AnalysisHistory)
+                .join(
+                    latest_subq,
+                    and_(
+                        AnalysisHistory.code == latest_subq.c.code,
+                        AnalysisHistory.created_at == latest_subq.c.latest_created_at,
+                    ),
+                )
+            ).scalars().all()
+
+            result: Dict[str, Dict[str, Any]] = {}
+            for r in rows:
+                key = str(r.code).upper()
+                result[key] = {
+                    "sentiment_score": r.sentiment_score,
+                    "operation_advice": r.operation_advice,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+            return result
     
     def get_analysis_history_paginated(
         self,

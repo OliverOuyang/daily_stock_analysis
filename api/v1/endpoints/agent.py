@@ -30,6 +30,7 @@ TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "analyze_pattern":            "识别K线形态",
     "get_market_indices":         "获取市场指数",
     "get_sector_rankings":        "分析行业板块",
+    "portfolio_review":           "资产组合诊断",
 }
 
 logger = logging.getLogger(__name__)

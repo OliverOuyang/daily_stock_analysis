@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Query
 from api.v1.schemas.common import ErrorResponse
 from api.v1.schemas.market import MarketDiscoverResponse, MarketLeader, SectorDiscoverItem
 from data_provider.base import canonical_stock_code
+from src.storage import get_db
 from src.services.task_queue import DuplicateTaskError, get_task_queue
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ router = APIRouter()
 _MARKET_DISCOVER_CACHE_TTL_SECONDS = int(os.getenv("MARKET_DISCOVER_CACHE_TTL_SECONDS", "1200"))
 _MIN_MARKET_CAP_BILLION = float(os.getenv("MARKET_DISCOVER_MIN_MARKET_CAP_BILLION", "30"))
 _CACHE_LOCK = threading.Lock()
-_DISCOVER_CACHE: Dict[Tuple[int, int], Dict[str, Any]] = {}
+_DISCOVER_CACHE: Dict[Tuple[int, int, Optional[int]], Dict[str, Any]] = {}
 
 
 _MOCK_HOT_SECTORS: List[Dict[str, Any]] = [
@@ -125,11 +126,11 @@ def _build_mock_hot_sectors(top_n: int, leaders_per_sector: int) -> List[Dict[st
     return sectors
 
 
-def _cache_key(top_n: int, leaders_per_sector: int) -> Tuple[int, int]:
-    return top_n, leaders_per_sector
+def _cache_key(top_n: int, leaders_per_sector: int, min_score: Optional[int]) -> Tuple[int, int, Optional[int]]:
+    return top_n, leaders_per_sector, min_score
 
 
-def _get_cached_discover_result(key: Tuple[int, int], ttl_seconds: int) -> Optional[Dict[str, Any]]:
+def _get_cached_discover_result(key: Tuple[int, int, Optional[int]], ttl_seconds: int) -> Optional[Dict[str, Any]]:
     now = time.time()
     with _CACHE_LOCK:
         item = _DISCOVER_CACHE.get(key)
@@ -147,7 +148,7 @@ def _get_cached_discover_result(key: Tuple[int, int], ttl_seconds: int) -> Optio
 
 
 def _set_cached_discover_result(
-    key: Tuple[int, int],
+    key: Tuple[int, int, Optional[int]],
     source: str,
     sectors: List[Dict[str, Any]],
     analysis_triggered: bool = False,
@@ -161,7 +162,7 @@ def _set_cached_discover_result(
         }
 
 
-def _mark_cached_analysis_triggered(key: Tuple[int, int]) -> None:
+def _mark_cached_analysis_triggered(key: Tuple[int, int, Optional[int]]) -> None:
     with _CACHE_LOCK:
         item = _DISCOVER_CACHE.get(key)
         if item:
@@ -343,9 +344,10 @@ def run_market_discover_scan(
     leaders_per_sector: int,
     trigger_analysis: bool,
     use_cache: bool = True,
+    min_score: Optional[int] = None,
 ) -> MarketDiscoverResponse:
     """Core discover+trigger logic for API and scheduler reuse."""
-    cache_key = _cache_key(top_n, leaders_per_sector)
+    cache_key = _cache_key(top_n, leaders_per_sector, min_score)
     source = "akshare_em"
     sectors_raw: List[Dict[str, Any]] = []
     analysis_triggered_on_cache = False
@@ -374,6 +376,40 @@ def run_market_discover_scan(
             sectors_raw = _build_mock_hot_sectors(top_n=top_n, leaders_per_sector=leaders_per_sector)
         if use_cache:
             _set_cached_discover_result(cache_key, source, sectors_raw, analysis_triggered=False)
+
+    # Optional high-score filter from latest analysis history.
+    if min_score is not None:
+        all_codes = []
+        for sec in sectors_raw:
+            for leader in sec.get("leaders", []):
+                code = str(leader.get("stock_code") or "").strip().upper()
+                if code:
+                    all_codes.append(code)
+        latest_scores = get_db().get_latest_sentiment_scores(all_codes, days=30) if all_codes else {}
+        if latest_scores:
+            original_sectors = sectors_raw
+            filtered: List[Dict[str, Any]] = []
+            for sec in sectors_raw:
+                leaders = []
+                for leader in sec.get("leaders", []):
+                    code = str(leader.get("stock_code") or "").strip().upper()
+                    score = latest_scores.get(code, {}).get("sentiment_score")
+                    if score is None or score < min_score:
+                        continue
+                    leader_new = dict(leader)
+                    leader_new["latest_score"] = score
+                    leaders.append(leader_new)
+                if leaders:
+                    sec_new = dict(sec)
+                    sec_new["leaders"] = leaders
+                    filtered.append(sec_new)
+            if filtered:
+                sectors_raw = filtered
+            else:
+                logger.info("min_score=%s 过滤后为空，保留原始异动结果避免空白页", min_score)
+                sectors_raw = original_sectors
+        else:
+            logger.info("min_score=%s 已启用，但历史评分为空，暂不执行过滤", min_score)
 
     task_queue = get_task_queue()
     triggered_tasks = 0
@@ -404,6 +440,7 @@ def run_market_discover_scan(
                 stock_code=leader["stock_code"],
                 stock_name=leader.get("stock_name"),
                 change_pct=leader.get("change_pct"),
+                latest_score=leader.get("latest_score"),
                 task_id=task_id,
             ))
 
@@ -435,6 +472,7 @@ def discover_market(
     top_n: int = Query(5, ge=1, le=20, description="行业数量"),
     leaders_per_sector: int = Query(2, ge=1, le=10, description="每个行业的龙头数量"),
     trigger_analysis: bool = Query(True, description="是否自动触发 simple 分析"),
+    min_score: Optional[int] = Query(70, ge=0, le=100, description="最低历史评分过滤阈值"),
 ) -> MarketDiscoverResponse:
     try:
         return run_market_discover_scan(
@@ -442,6 +480,7 @@ def discover_market(
             leaders_per_sector=leaders_per_sector,
             trigger_analysis=trigger_analysis,
             use_cache=True,
+            min_score=min_score,
         )
     except HTTPException:
         raise

@@ -11,7 +11,7 @@ Tools:
 
 import json
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 from src.agent.tools.registry import ToolParameter, ToolDefinition
 
@@ -296,6 +296,213 @@ get_stock_info_tool = ToolDefinition(
 
 
 # ============================================================
+# portfolio_review
+# ============================================================
+
+def _compute_fear_greed_score(indices: List[Dict[str, Any]], market_stats: Dict[str, Any]) -> int:
+    """
+    Heuristic fear-greed score (0-100), higher means greed/risk-on.
+    """
+    change_values = []
+    for item in indices or []:
+        try:
+            val = item.get("change_pct")
+            if val is not None:
+                change_values.append(float(val))
+        except Exception:
+            continue
+    avg_change = sum(change_values) / len(change_values) if change_values else 0.0
+    # map -3%..+3% to 0..100
+    score_from_change = int(max(0, min(100, (avg_change + 3.0) / 6.0 * 100)))
+
+    breadth_score = 50
+    try:
+        up_count = float(market_stats.get("up_count", 0) or 0)
+        down_count = float(market_stats.get("down_count", 0) or 0)
+        total = up_count + down_count
+        if total > 0:
+            breadth_score = int(max(0, min(100, up_count / total * 100)))
+    except Exception:
+        breadth_score = 50
+
+    return int(round(score_from_change * 0.6 + breadth_score * 0.4))
+
+
+def _fear_greed_label(score: int) -> str:
+    if score >= 75:
+        return "贪婪"
+    if score >= 60:
+        return "偏乐观"
+    if score >= 40:
+        return "中性"
+    if score >= 25:
+        return "偏谨慎"
+    return "恐慌"
+
+
+def _handle_portfolio_review(available_cash: float = 0.0, min_score: int = 70) -> dict:
+    """
+    Review holding portfolio and provide position/buy-list suggestions.
+    """
+    db = _get_db()
+    manager = _get_fetcher_manager()
+
+    profiles = db.list_portfolio_profiles(status="holding", limit=500)
+    if not profiles:
+        return {
+            "available_cash": float(available_cash or 0.0),
+            "holdings_count": 0,
+            "message": "当前无 holding 持仓，建议先从高分异动板块里筛选 1-2 只试仓。",
+            "risk_diversification": {
+                "industry_concentration": "无持仓",
+                "top_industry_exposure_pct": 0,
+                "assessment": "无集中风险",
+            },
+            "position_recommendation": {
+                "market_fear_greed": {"score": 50, "label": "中性"},
+                "total_position_pct": 0,
+                "assessment": "空仓",
+                "suggested_range_pct": "20-40",
+            },
+            "bullet_plan": {"buy_list": []},
+        }
+
+    codes = [str(p.get("stock_code") or "").upper() for p in profiles if p.get("stock_code")]
+    latest_scores = db.get_latest_sentiment_scores(codes, days=30)
+
+    # Build industry concentration map
+    industry_weights: Dict[str, float] = {}
+    holding_rows: List[Dict[str, Any]] = []
+    total_position_pct = 0.0
+
+    for p in profiles:
+        code = str(p.get("stock_code") or "").upper()
+        position_pct = float(p.get("position_pct") or 0.0)
+        total_position_pct += position_pct
+
+        industry = "未知行业"
+        try:
+            info = _handle_get_stock_info(code)
+            for k in ("行业", "所属行业", "industry", "行业板块"):
+                if info.get(k):
+                    industry = str(info.get(k))
+                    break
+        except Exception:
+            pass
+
+        industry_weights[industry] = industry_weights.get(industry, 0.0) + position_pct
+        score_info = latest_scores.get(code, {})
+        holding_rows.append({
+            "stock_code": code,
+            "stock_name": p.get("stock_name"),
+            "buy_price": p.get("buy_price"),
+            "position_pct": position_pct,
+            "shares": p.get("shares"),
+            "latest_score": score_info.get("sentiment_score"),
+            "latest_advice": score_info.get("operation_advice"),
+        })
+
+    top_industry = max(industry_weights.items(), key=lambda x: x[1]) if industry_weights else ("未知行业", 0.0)
+    top_industry_name, top_industry_exposure = top_industry
+    concentration_assessment = "分散良好"
+    if top_industry_exposure >= 45:
+        concentration_assessment = "行业集中偏高，建议降低单行业暴露"
+    elif top_industry_exposure >= 30:
+        concentration_assessment = "行业有一定集中，建议新增非同板块标的对冲"
+
+    # Market regime from indices + breadth
+    indices = manager.get_main_indices(region="cn") or []
+    market_stats = manager.get_market_stats() or {}
+    fear_greed_score = _compute_fear_greed_score(indices, market_stats)
+    fear_greed = {"score": fear_greed_score, "label": _fear_greed_label(fear_greed_score)}
+
+    suggested_range = "50-70"
+    if fear_greed_score >= 70:
+        suggested_range = "65-85"
+    elif fear_greed_score <= 35:
+        suggested_range = "30-50"
+
+    position_assessment = "仓位健康"
+    if total_position_pct > 85:
+        position_assessment = "总仓位偏高，优先做减仓与结构优化"
+    elif total_position_pct < 35:
+        position_assessment = "总仓位偏低，可分批提高仓位"
+
+    # Bullet plan: prefer high-score leaders from market discover
+    buy_list: List[Dict[str, Any]] = []
+    try:
+        from api.v1.endpoints.market import run_market_discover_scan
+        discover = run_market_discover_scan(
+            top_n=5,
+            leaders_per_sector=3,
+            trigger_analysis=False,
+            use_cache=True,
+            min_score=min_score,
+        )
+        for sec in discover.sectors:
+            for leader in sec.leaders:
+                buy_list.append({
+                    "sector_name": sec.sector_name,
+                    "stock_code": leader.stock_code,
+                    "stock_name": leader.stock_name,
+                    "latest_score": leader.latest_score,
+                    "reason": f"异动板块龙头 + 最近评分>= {min_score}",
+                })
+    except Exception as e:
+        logger.warning("portfolio_review 获取异动高分清单失败: %s", e)
+
+    return {
+        "available_cash": float(available_cash or 0.0),
+        "holdings_count": len(holding_rows),
+        "holdings": holding_rows,
+        "risk_diversification": {
+            "industry_concentration": top_industry_name,
+            "top_industry_exposure_pct": round(float(top_industry_exposure), 2),
+            "assessment": concentration_assessment,
+        },
+        "position_recommendation": {
+            "market_fear_greed": fear_greed,
+            "total_position_pct": round(float(total_position_pct), 2),
+            "assessment": position_assessment,
+            "suggested_range_pct": suggested_range,
+        },
+        "bullet_plan": {
+            "buy_list": buy_list[:8],
+            "available_cash_usage_hint": (
+                "建议先用 30%-40% 现金分两笔试仓，再根据次日量价反馈追加。"
+                if float(available_cash or 0) > 0 else
+                "未提供可用现金，建议先确认可动用子弹后再执行买入清单。"
+            ),
+        },
+    }
+
+
+portfolio_review_tool = ToolDefinition(
+    name="portfolio_review",
+    description="Review current holding portfolio from DB. Returns concentration risk, total position "
+                "health, market fear-greed context and prioritized buy-list from high-score hot sectors.",
+    parameters=[
+        ToolParameter(
+            name="available_cash",
+            type="number",
+            description="Available cash amount in CNY for building bullet buy plan.",
+            required=False,
+            default=0.0,
+        ),
+        ToolParameter(
+            name="min_score",
+            type="integer",
+            description="Minimum latest sentiment score when selecting hot-sector buy candidates.",
+            required=False,
+            default=70,
+        ),
+    ],
+    handler=_handle_portfolio_review,
+    category="analysis",
+)
+
+
+# ============================================================
 # Export all data tools
 # ============================================================
 
@@ -305,4 +512,5 @@ ALL_DATA_TOOLS = [
     get_chip_distribution_tool,
     get_analysis_context_tool,
     get_stock_info_tool,
+    portfolio_review_tool,
 ]
