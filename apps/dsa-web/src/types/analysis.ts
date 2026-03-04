@@ -38,12 +38,24 @@ export interface ReportSummary {
   sentimentLabel?: SentimentLabel;
 }
 
+/** 持仓动作建议（结构化） */
+export interface ReportPositionActions {
+  reducePrice?: number;
+  reduceRatioPct?: number;
+  addPrice?: number;
+  addRatioPct?: number;
+  basis?: string;
+  confidence?: number;
+  missingReason?: string;
+}
+
 /** 策略点位区 */
 export interface ReportStrategy {
   idealBuy?: string;
   secondaryBuy?: string;
   stopLoss?: string;
   takeProfit?: string;
+  positionActions?: ReportPositionActions;
 }
 
 /** 详情区（可折叠） */

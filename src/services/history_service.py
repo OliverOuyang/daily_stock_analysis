@@ -210,6 +210,13 @@ class HistoryService:
             except json.JSONDecodeError:
                 context_snapshot = record.context_snapshot
 
+        position_actions = None
+        if isinstance(raw_result, dict):
+            strategy = raw_result.get("strategy") if isinstance(raw_result.get("strategy"), dict) else {}
+            pa = strategy.get("position_actions")
+            if isinstance(pa, dict):
+                position_actions = pa
+
         return {
             "id": record.id,
             "query_id": record.query_id,
@@ -226,6 +233,7 @@ class HistoryService:
             "secondary_buy": str(record.secondary_buy) if record.secondary_buy else None,
             "stop_loss": str(record.stop_loss) if record.stop_loss else None,
             "take_profit": str(record.take_profit) if record.take_profit else None,
+            "position_actions": position_actions,
             "news_content": record.news_content,
             "raw_result": raw_result,
             "context_snapshot": context_snapshot,

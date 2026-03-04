@@ -2,25 +2,30 @@ import type React from 'react';
 import { useState, useEffect } from 'react';
 import type { MarketDiscoverResponse, SectorDiscoverItem } from '../../types/market';
 import { marketApi } from '../../api/market';
+import { portfolioApi } from '../../api/portfolio';
 
 interface MarketDiscoverPanelProps {
   onSelectStock: (code: string) => void;
   onAnalyze: (code: string) => void;
+  onFavoriteAdded?: () => void;
 }
 
 export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
   onSelectStock,
   onAnalyze,
+  onFavoriteAdded,
 }) => {
   const [data, setData] = useState<MarketDiscoverResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [minScore, setMinScore] = useState(70);
+  const [toast, setToast] = useState<string | null>(null);
 
   const fetchDiscovery = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await marketApi.discover({ triggerAnalysis: false });
+      const res = await marketApi.discover({ triggerAnalysis: false, minScore });
       setData(res);
     } catch (err) {
       setError('获取市场发现数据失败');
@@ -31,8 +36,28 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
   };
 
   useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     fetchDiscovery();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minScore]);
+
+  const addToWatchlist = async (code: string, name?: string) => {
+    try {
+      await portfolioApi.upsert({
+        stockCode: code,
+        stockName: name,
+        status: 'watch',
+        isFavorite: true,
+      });
+      setToast(`${code} 已加入自选`);
+      setTimeout(() => setToast(null), 1800);
+      onFavoriteAdded?.();
+    } catch (e) {
+      setToast(`加入自选失败: ${code}`);
+      setTimeout(() => setToast(null), 1800);
+      console.error(e);
+    }
+  };
 
   return (
     <div className="glass-card flex flex-col overflow-hidden border-cyan/10 shadow-lg shadow-cyan/5">
@@ -62,6 +87,18 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
           {isLoading ? '扫描中' : '刷新'}
         </button>
       </div>
+      <div className="px-3 py-2 border-b border-white/5 bg-black/10 flex items-center justify-between gap-2">
+        <label className="text-[10px] text-muted">评分过滤(min_score)</label>
+        <input
+          type="number"
+          min={0}
+          max={100}
+          value={minScore}
+          onChange={(e) => setMinScore(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+          className="input-terminal py-0.5 px-2 w-16 text-[11px]"
+        />
+      </div>
+      {toast && <div className="px-3 py-1 text-[10px] text-cyan bg-cyan/10 border-b border-cyan/20">{toast}</div>}
 
       <div className="p-2 space-y-4 max-h-[320px] overflow-y-auto custom-scrollbar bg-black/10">
         {error ? (
@@ -99,9 +136,20 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
                       <p className="text-[9px] text-muted font-mono opacity-70">{leader.stockCode}</p>
                     </div>
                     <div className="flex items-center gap-2">
+                      {leader.latestScore !== undefined && leader.latestScore !== null && (
+                        <span className="text-[9px] px-1 py-0.5 rounded border border-cyan/30 text-cyan-300 font-mono">
+                          S:{leader.latestScore}
+                        </span>
+                      )}
                       <span className="text-[10px] font-mono text-emerald-400 group-hover/item:hidden">
                         {leader.changePct && leader.changePct > 0 ? '+' : ''}{leader.changePct?.toFixed(1)}%
                       </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); void addToWatchlist(leader.stockCode, leader.stockName); }}
+                        className="text-[9px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25 transition-all"
+                      >
+                        收藏
+                      </button>
                       <button 
                         onClick={(e) => { e.stopPropagation(); onAnalyze(leader.stockCode); }}
                         className="hidden group-hover/item:flex items-center gap-1 text-[9px] px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/30 transition-all"

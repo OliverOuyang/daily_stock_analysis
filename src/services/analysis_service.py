@@ -116,6 +116,11 @@ class AnalysisService:
         if hasattr(result, 'get_sniper_points'):
             sniper_points = result.get_sniper_points() or {}
         
+        # 获取结构化持仓动作建议
+        position_actions = {}
+        if hasattr(result, 'get_position_actions'):
+            position_actions = result.get_position_actions() or {}
+
         # 计算情绪标签
         sentiment_label = self._get_sentiment_label(result.sentiment_score)
         
@@ -141,6 +146,7 @@ class AnalysisService:
                 "secondary_buy": sniper_points.get("secondary_buy"),
                 "stop_loss": sniper_points.get("stop_loss"),
                 "take_profit": sniper_points.get("take_profit"),
+                "position_actions": position_actions,
             },
             "details": {
                 "news_summary": result.news_summary,

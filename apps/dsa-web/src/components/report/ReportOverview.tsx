@@ -1,11 +1,16 @@
 import type React from 'react';
-import type { ReportMeta, ReportSummary as ReportSummaryType } from '../../types/analysis';
+import type {
+  ReportMeta,
+  ReportSummary as ReportSummaryType,
+  ReportStrategy,
+} from '../../types/analysis';
 import { ScoreGauge, Card } from '../common';
 import { formatDateTime } from '../../utils/format';
 
 interface ReportOverviewProps {
   meta: ReportMeta;
   summary: ReportSummaryType;
+  strategy?: ReportStrategy;
   isHistory?: boolean;
 }
 
@@ -14,8 +19,23 @@ interface ReportOverviewProps {
  */
 export const ReportOverview: React.FC<ReportOverviewProps> = ({
   meta,
-  summary
+  summary,
+  strategy,
 }) => {
+  const parsePositionActions = (text: string) => {
+    const clean = text.replace(/\s+/g, ' ');
+    const reduceMatch = clean.match(/(?:减仓|卖出)[^。；\n]*?(\d+(?:\.\d+)?)\s*%?/);
+    const addMatch = clean.match(/(?:补仓|加仓)[^。；\n]*?(\d+(?:\.\d+)?)\s*%?/);
+    const reduceText = reduceMatch ? `建议减仓/卖出比例: ${reduceMatch[1]}%` : '未提取到明确减仓比例';
+    const addText = addMatch ? `建议补仓/加仓比例: ${addMatch[1]}%` : '未提取到明确补仓比例';
+    return { reduceText, addText };
+  };
+
+  const fallbackPositionActions = parsePositionActions(
+    `${summary.operationAdvice || ''}\n${summary.analysisSummary || ''}`,
+  );
+  const structuredActions = strategy?.positionActions;
+
   // 根据涨跌幅获取颜色
   const getPriceChangeColor = (changePct: number | undefined): string => {
     if (changePct === undefined || changePct === null) return 'text-muted';
@@ -116,6 +136,41 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
               </div>
             </Card>
           </div>
+
+          <Card variant="bordered" padding="sm">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-cyan/10 flex items-center justify-center flex-shrink-0">
+                <svg className="w-4 h-4 text-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h11M9 21V3m12 11h-8m4-4 4 4-4 4" />
+                </svg>
+              </div>
+              <div className="space-y-1">
+                <h4 className="text-xs font-medium text-cyan mb-0.5">持仓动作建议（结构化优先）</h4>
+                {structuredActions ? (
+                  <>
+                    <p className="text-[12px] text-white">
+                      {structuredActions.reducePrice != null || structuredActions.reduceRatioPct != null
+                        ? `减仓: ${structuredActions.reducePrice != null ? `${structuredActions.reducePrice}` : '--'} 元，${structuredActions.reduceRatioPct != null ? `${structuredActions.reduceRatioPct}%` : '--'}`
+                        : '减仓: 暂无明确价位/比例'}
+                    </p>
+                    <p className="text-[12px] text-white">
+                      {structuredActions.addPrice != null || structuredActions.addRatioPct != null
+                        ? `补仓: ${structuredActions.addPrice != null ? `${structuredActions.addPrice}` : '--'} 元，${structuredActions.addRatioPct != null ? `${structuredActions.addRatioPct}%` : '--'}`
+                        : '补仓: 暂无明确价位/比例'}
+                    </p>
+                    {structuredActions.basis && (
+                      <p className="text-[11px] text-secondary">依据: {structuredActions.basis}</p>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[12px] text-white">{fallbackPositionActions.reduceText}</p>
+                    <p className="text-[12px] text-white">{fallbackPositionActions.addText}</p>
+                  </>
+                )}
+              </div>
+            </div>
+          </Card>
         </div>
 
         {/* 右侧：情绪指标 - 填满格子高度，消除与 STRATEGY POINTS 之间的空隙 */}

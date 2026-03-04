@@ -201,7 +201,8 @@ def get_history_detail(
             ideal_buy=result.get("ideal_buy"),
             secondary_buy=result.get("secondary_buy"),
             stop_loss=result.get("stop_loss"),
-            take_profit=result.get("take_profit")
+            take_profit=result.get("take_profit"),
+            position_actions=result.get("position_actions")
         )
         
         details = ReportDetails(

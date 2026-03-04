@@ -7,12 +7,14 @@ export const marketApi = {
     topN?: number;
     leadersPerSector?: number;
     triggerAnalysis?: boolean;
+    minScore?: number;
   }): Promise<MarketDiscoverResponse> => {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/market/discover', {
       params: {
         top_n: params?.topN ?? 5,
         leaders_per_sector: params?.leadersPerSector ?? 2,
         trigger_analysis: params?.triggerAnalysis ?? true,
+        min_score: params?.minScore ?? 70,
       },
     });
     return toCamelCase<MarketDiscoverResponse>(response.data);

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import type { HistoryItem, AnalysisReport, TaskInfo } from '../types/analysis';
 import type { PortfolioProfile, PortfolioStatus } from '../types/portfolio';
 import { historyApi } from '../api/history';
-import { analysisApi, DuplicateTaskError } from '../api/analysis';
+import { analysisApi } from '../api/analysis';
 import { portfolioApi } from '../api/portfolio';
 import { stocksApi, type StockQuote } from '../api/stocks';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
@@ -34,12 +34,9 @@ const HomePage: React.FC = () => {
   const [isLoadingReport, setIsLoadingReport] = useState(false);
 
   const [activeTasks, setActiveTasks] = useState<TaskInfo[]>([]);
-  const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [batchSize, setBatchSize] = useState(3);
-  const [batchDelayMs, setBatchDelayMs] = useState(600);
-  const [batchInfo, setBatchInfo] = useState<string | null>(null);
-  const [showBatchSettings, setShowBatchSettings] = useState(false);
+  const [batchSize] = useState(3);
+  const [batchDelayMs] = useState(600);
 
   const [profiles, setProfiles] = useState<PortfolioProfile[]>([]);
   const [isLoadingProfiles, setIsLoadingProfiles] = useState(false);
@@ -282,6 +279,26 @@ const HomePage: React.FC = () => {
     } catch { setSelectedReport(null); setSuggestedValues({}); }
   };
 
+  const handleAnalyzeFromWatchlist = (codes: string | string[]) => {
+    const targetCodes = Array.isArray(codes) ? codes : [codes];
+    if (targetCodes.length === 0) return;
+    setStockCode(targetCodes.join(','));
+    void (async () => {
+      setIsAnalyzing(true);
+      setLoading(true);
+      try {
+        await Promise.allSettled(
+          targetCodes.map((code) => analysisApi.analyzeAsync({ stockCode: code, reportType: 'detailed' })),
+        );
+      } catch (err) {
+        setStoreError('分析失败');
+      } finally {
+        setIsAnalyzing(false);
+        setLoading(false);
+      }
+    })();
+  };
+
   const handleAnalyzePortfolio = async () => {
     setIsAnalyzingPortfolio(true);
     try {
@@ -303,8 +320,8 @@ const HomePage: React.FC = () => {
 
   const sidebarItems = (
     <div className="flex flex-col gap-3">
-      <WatchlistPanel items={filteredProfiles} isLoading={isLoadingProfiles} quotes={watchlistQuotes} historicalTargets={historicalTargets} filter={profileFilter} onFilterChange={setProfileFilter} onUseCode={handleSelectFromWatchlist} onAnalyze={handleSelectFromWatchlist} onDelete={(c) => portfolioApi.remove(c).then(fetchPortfolioProfiles)} />
-      <MarketDiscoverPanel onSelectStock={handleSelectFromWatchlist} onAnalyze={handleSelectFromWatchlist} />
+      <WatchlistPanel items={filteredProfiles} isLoading={isLoadingProfiles} quotes={watchlistQuotes} historicalTargets={historicalTargets} filter={profileFilter} onFilterChange={setProfileFilter} onUseCode={handleSelectFromWatchlist} onAnalyze={handleAnalyzeFromWatchlist} onDelete={(c) => portfolioApi.remove(c).then(fetchPortfolioProfiles)} />
+      <MarketDiscoverPanel onSelectStock={handleSelectFromWatchlist} onAnalyze={(code) => handleAnalyzeFromWatchlist(code)} onFavoriteAdded={fetchPortfolioProfiles} />
       <TaskPanel tasks={activeTasks} />
       <HistoryList items={historyItems} isLoading={isLoadingHistory} isLoadingMore={isLoadingMore} hasMore={hasMore} selectedId={selectedReport?.meta.id} onItemClick={handleHistoryClick} onLoadMore={() => !isLoadingMore && hasMore && fetchHistory(false, false)} className="flex-1 min-h-[200px]" />
     </div>
@@ -319,6 +336,8 @@ const HomePage: React.FC = () => {
             <input type="text" value={stockCode} onChange={(e) => setStockCode(e.target.value.toUpperCase())} placeholder="输入代码，如: 600519" className="input-terminal py-1.5 px-3 flex-1 text-sm bg-white/5" />
             <button onClick={handleAnalyze} disabled={!stockCode || isAnalyzing} className="btn-primary h-9 px-6 text-sm shadow-cyan/20">{isAnalyzing ? '分析中...' : '执行分析'}</button>
           </div>
+          <div className="text-[10px] text-muted font-mono">build: e7559e1</div>
+          {inputError && <p className="text-[11px] text-rose-400">{inputError}</p>}
 
           <div className="glass-card p-2 border-white/5 grid grid-cols-1 xl:grid-cols-12 gap-3 items-start">
             <div className="xl:col-span-4 space-y-2">
@@ -339,7 +358,7 @@ const HomePage: React.FC = () => {
               <div className="flex items-center gap-2"><div className="w-1 h-3 bg-amber-500 rounded-full" /><span className="text-[10px] font-bold text-muted uppercase">资产分析 & AI 点位</span></div>
               <div className="flex gap-1.5">
                 <input value={availableCash} onChange={e => setAvailableCash(e.target.value)} placeholder="可用现金" className="input-terminal py-1 px-2 text-[11px] flex-1" />
-                <button onClick={handleAnalyzePortfolio} className="px-2 py-1 rounded bg-amber-500/20 text-amber-300 text-[10px] border border-amber-500/30">诊断</button>
+                <button onClick={handleAnalyzePortfolio} disabled={isAnalyzingPortfolio} className="px-2 py-1 rounded bg-amber-500/20 text-amber-300 text-[10px] border border-amber-500/30 disabled:opacity-60">{isAnalyzingPortfolio ? '诊断中...' : '诊断'}</button>
               </div>
               <div className="grid grid-cols-3 gap-1.5">
                 <div className="space-y-1"><div className="flex justify-between text-[9px] text-muted">入场 {suggestedValues.targetBuy && <span onClick={() => setTargetBuyInput(suggestedValues.targetBuy!.replace(/[^0-9.]/g,''))} className="text-cyan cursor-pointer">点</span>}</div><input value={targetBuyInput} onChange={e=>setTargetBuyInput(e.target.value)} className="input-terminal py-1 px-2 text-[10px] w-full" /></div>

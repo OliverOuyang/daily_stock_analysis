@@ -2,6 +2,7 @@ export interface MarketLeader {
   stockCode: string;
   stockName?: string;
   changePct?: number;
+  latestScore?: number;
   taskId?: string;
 }
 

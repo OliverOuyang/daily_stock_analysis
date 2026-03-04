@@ -14,3 +14,11 @@
 - [ ] `src/scheduler.py`: make 10:30 / 14:30 scan task idempotent across multi-instance deployment (distributed lock).
 - [ ] `api/v1/endpoints/market.py`: enrich full-source failure fallback with stable mock pack + source error diagnostics for frontend display.
 - [ ] `data_provider/manager` + `src/services/stock_service.py`: add automatic source failover and circuit-breaker when realtime quote fetch fails repeatedly.
+
+## Frontend/Backend Integration Follow-ups
+
+- [x] `apps/dsa-web/src/components/report/ReportOverview.tsx`: render structured `strategy.positionActions` first, fallback to text extraction.
+- [x] `apps/dsa-web/src/components/history/MarketDiscoverPanel.tsx`: support `onFavoriteAdded` callback to refresh watchlist after 收藏.
+- [x] `apps/dsa-web/src/pages/HomePage.tsx`: fix market discover Analyze action to trigger analyze flow (instead of only selecting symbol).
+- [ ] Add backend test case asserting `ReportStrategy.position_actions` is present in `/analysis/tasks/{id}` completed response when analyzer returns structured actions.
+- [ ] Add frontend E2E smoke test: 收藏 from market discover -> watchlist shows new symbol -> click symbol loads latest report + profile.

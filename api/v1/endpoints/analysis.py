@@ -437,6 +437,19 @@ def get_analysis_status(task_id: str) -> TaskStatus:
 
         if records:
             record = records[0]
+            raw_result = None
+            if getattr(record, 'raw_result', None):
+                try:
+                    raw_result = json.loads(record.raw_result)
+                except Exception:
+                    raw_result = None
+            position_actions = None
+            if isinstance(raw_result, dict):
+                strategy_raw = raw_result.get("strategy") if isinstance(raw_result.get("strategy"), dict) else {}
+                pa = strategy_raw.get("position_actions")
+                if isinstance(pa, dict):
+                    position_actions = pa
+
             # Build report from DB record so completed tasks return real data
             report_dict = AnalysisReport(
                 meta=ReportMeta(
@@ -458,6 +471,7 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                     secondary_buy=str(getattr(record, 'secondary_buy', None)) if getattr(record, 'secondary_buy', None) is not None else None,
                     stop_loss=str(getattr(record, 'stop_loss', None)) if getattr(record, 'stop_loss', None) is not None else None,
                     take_profit=str(getattr(record, 'take_profit', None)) if getattr(record, 'take_profit', None) is not None else None,
+                    position_actions=position_actions,
                 ),
             ).model_dump()
             return TaskStatus(
@@ -545,7 +559,8 @@ def _build_analysis_report(
             ideal_buy=strategy_data.get("ideal_buy"),
             secondary_buy=strategy_data.get("secondary_buy"),
             stop_loss=strategy_data.get("stop_loss"),
-            take_profit=strategy_data.get("take_profit")
+            take_profit=strategy_data.get("take_profit"),
+            position_actions=strategy_data.get("position_actions"),
         )
 
     details = None

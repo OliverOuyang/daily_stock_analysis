@@ -163,6 +163,8 @@ class AnalysisResult:
 
     # ========== 决策仪表盘 (新增) ==========
     dashboard: Optional[Dict[str, Any]] = None  # 完整的决策仪表盘数据
+    # 结构化持仓动作建议（holding 场景优先）
+    position_actions: Optional[Dict[str, Any]] = None
 
     # ========== 走势分析 ==========
     trend_analysis: str = ""  # 走势形态分析（支撑位、压力位、趋势线等）
@@ -214,6 +216,7 @@ class AnalysisResult:
             'decision_type': self.decision_type,
             'confidence_level': self.confidence_level,
             'dashboard': self.dashboard,  # 决策仪表盘数据
+            'position_actions': self.position_actions,
             'trend_analysis': self.trend_analysis,
             'short_term_outlook': self.short_term_outlook,
             'medium_term_outlook': self.medium_term_outlook,
@@ -258,6 +261,16 @@ class AnalysisResult:
         """获取狙击点位"""
         if self.dashboard and 'battle_plan' in self.dashboard:
             return self.dashboard['battle_plan'].get('sniper_points', {})
+        return {}
+
+    def get_position_actions(self) -> Dict[str, Any]:
+        """获取结构化持仓动作建议。"""
+        if isinstance(self.position_actions, dict):
+            return self.position_actions
+        if self.dashboard and 'battle_plan' in self.dashboard:
+            raw = self.dashboard['battle_plan'].get('position_actions')
+            if isinstance(raw, dict):
+                return raw
         return {}
 
     def get_checklist(self) -> List[str]:
@@ -446,6 +459,14 @@ class GeminiAnalyzer:
                 "secondary_buy": "次优买入点：XX元（在MA10附近）",
                 "stop_loss": "止损位：XX元（跌破MA20或X%）",
                 "take_profit": "目标位：XX元（前高/整数关口）"
+            },
+            "position_actions": {
+                "reduce_price": 数值或null,
+                "reduce_ratio_pct": 数值或null,
+                "add_price": 数值或null,
+                "add_ratio_pct": 数值或null,
+                "basis": "动作依据（如 MA20/前高/仓位管理）",
+                "confidence": 0-100整数
             },
             "position_strategy": {
                 "suggested_position": "建议仓位：X成",
@@ -1137,6 +1158,7 @@ class GeminiAnalyzer:
                 
                 # 提取 dashboard 数据
                 dashboard = data.get('dashboard', None)
+                position_actions = self._extract_position_actions(data, dashboard)
 
                 # 优先使用 AI 返回的股票名称（如果原名称无效或包含代码）
                 ai_stock_name = data.get('stock_name')
@@ -1166,6 +1188,7 @@ class GeminiAnalyzer:
                     confidence_level=data.get('confidence_level', '中'),
                     # 决策仪表盘
                     dashboard=dashboard,
+                    position_actions=position_actions,
                     # 走势分析
                     trend_analysis=data.get('trend_analysis', ''),
                     short_term_outlook=data.get('short_term_outlook', ''),
@@ -1222,6 +1245,51 @@ class GeminiAnalyzer:
         
         return json_str
     
+    @staticmethod
+    def _to_float_or_none(v: Any) -> Optional[float]:
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        s = str(v).strip()
+        if not s:
+            return None
+        m = re.search(r"-?\d+(?:\.\d+)?", s)
+        return float(m.group()) if m else None
+
+    def _extract_position_actions(
+        self,
+        data: Dict[str, Any],
+        dashboard: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        提取并标准化持仓动作建议结构。
+        优先级：
+        1) data.position_actions
+        2) dashboard.battle_plan.position_actions
+        """
+        raw = data.get("position_actions")
+        if not isinstance(raw, dict) and isinstance(dashboard, dict):
+            raw = (
+                dashboard.get("battle_plan", {}).get("position_actions")
+                if isinstance(dashboard.get("battle_plan"), dict) else None
+            )
+        if not isinstance(raw, dict):
+            return None
+
+        parsed = {
+            "reduce_price": self._to_float_or_none(raw.get("reduce_price")),
+            "reduce_ratio_pct": self._to_float_or_none(raw.get("reduce_ratio_pct")),
+            "add_price": self._to_float_or_none(raw.get("add_price")),
+            "add_ratio_pct": self._to_float_or_none(raw.get("add_ratio_pct")),
+            "basis": str(raw.get("basis") or "").strip() or None,
+            "confidence": self._to_float_or_none(raw.get("confidence")),
+            "missing_reason": str(raw.get("missing_reason") or "").strip() or None,
+        }
+        if parsed["confidence"] is not None:
+            parsed["confidence"] = int(max(0, min(100, round(float(parsed["confidence"])))))
+        return parsed
+
     def _parse_text_response(
         self, 
         response_text: str, 

@@ -31,6 +31,7 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
       <ReportOverview
         meta={meta}
         summary={summary}
+        strategy={strategy}
         isHistory={isHistory}
       />
 

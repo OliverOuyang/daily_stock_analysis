@@ -125,6 +125,19 @@ class ReportSummary(BaseModel):
     sentiment_label: Optional[str] = Field(None, description="情绪标签")
 
 
+
+class ReportPositionActions(BaseModel):
+    """持仓动作建议（结构化）"""
+
+    reduce_price: Optional[float] = Field(None, description="建议减仓价")
+    reduce_ratio_pct: Optional[float] = Field(None, description="建议减仓比例(%)")
+    add_price: Optional[float] = Field(None, description="建议补仓价")
+    add_ratio_pct: Optional[float] = Field(None, description="建议补仓比例(%)")
+    basis: Optional[str] = Field(None, description="动作依据")
+    confidence: Optional[int] = Field(None, ge=0, le=100, description="建议置信度")
+    missing_reason: Optional[str] = Field(None, description="缺失原因")
+
+
 class ReportStrategy(BaseModel):
     """策略点位区"""
     
@@ -132,6 +145,7 @@ class ReportStrategy(BaseModel):
     secondary_buy: Optional[str] = Field(None, description="第二买入价")
     stop_loss: Optional[str] = Field(None, description="止损价")
     take_profit: Optional[str] = Field(None, description="止盈价")
+    position_actions: Optional[ReportPositionActions] = Field(None, description="持仓动作建议")
 
 
 class ReportDetails(BaseModel):
