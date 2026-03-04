@@ -50,19 +50,6 @@ class StockService:
                 logger.warning(f"获取 {stock_code} 实时行情失败")
                 return None
             
-            # UnifiedRealtimeQuote 是 dataclass，使用 getattr 安全访问字段
-            # 字段映射: UnifiedRealtimeQuote -> API 响应
-            # - code -> stock_code
-            # - name -> stock_name
-            # - price -> current_price
-            # - change_amount -> change
-            # - change_pct -> change_percent
-            # - open_price -> open
-            # - high -> high
-            # - low -> low
-            # - pre_close -> prev_close
-            # - volume -> volume
-            # - amount -> amount
             return {
                 "stock_code": getattr(quote, "code", stock_code),
                 "stock_name": getattr(quote, "name", None),
@@ -84,6 +71,18 @@ class StockService:
         except Exception as e:
             logger.error(f"获取实时行情失败: {e}", exc_info=True)
             return None
+
+    def batch_get_realtime_quotes(self, stock_codes: List[str]) -> List[Dict[str, Any]]:
+        """
+        批量获取股票实时行情
+        """
+        results = []
+        # 注意：这里可以使用多线程加速，但为了安全先串行或利用 DataFetcherManager 内部机制
+        for code in stock_codes:
+            quote = self.get_realtime_quote(code)
+            if quote:
+                results.append(quote)
+        return results
     
     def get_history_data(
         self,

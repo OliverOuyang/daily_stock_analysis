@@ -6,12 +6,13 @@
 
 职责：
 1. POST /api/v1/stocks/extract-from-image 从图片提取股票代码
-2. GET /api/v1/stocks/{code}/quote 实时行情接口
-3. GET /api/v1/stocks/{code}/history 历史行情接口
+2. GET /api/v1/stocks/quotes 批量获取实时行情
+3. GET /api/v1/stocks/{code}/quote 实时行情接口
+4. GET /api/v1/stocks/{code}/history 历史行情接口
 """
 
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
@@ -20,6 +21,7 @@ from api.v1.schemas.stocks import (
     KLineData,
     StockHistoryResponse,
     StockQuote,
+    StockQuotesResponse,
 )
 from api.v1.schemas.common import ErrorResponse
 from src.services.image_stock_extractor import (
@@ -106,6 +108,36 @@ def extract_from_image(
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "message": "图片提取失败"},
+        )
+
+
+@router.get(
+    "/quotes",
+    response_model=StockQuotesResponse,
+    summary="批量获取股票实时行情",
+)
+def get_stock_quotes(
+    codes: str = Query(..., description="股票代码，逗号分隔"),
+) -> StockQuotesResponse:
+    """
+    批量获取股票实时行情
+    """
+    if not codes:
+        return StockQuotesResponse(items=[])
+    
+    code_list = [c.strip() for x in codes.split(",") if (c := x.strip())]
+    if not code_list:
+        return StockQuotesResponse(items=[])
+
+    try:
+        service = StockService()
+        results = service.batch_get_realtime_quotes(code_list)
+        return StockQuotesResponse(items=[StockQuote(**r) for r in results])
+    except Exception as e:
+        logger.error(f"批量获取行情失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": f"批量获取行情失败: {str(e)}"}
         )
 
 

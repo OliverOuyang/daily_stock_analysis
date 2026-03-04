@@ -100,3 +100,8 @@ class StockHistoryResponse(BaseModel):
                 "data": []
             }
         }
+
+
+class StockQuotesResponse(BaseModel):
+    """批量股票行情响应"""
+    items: List[StockQuote]

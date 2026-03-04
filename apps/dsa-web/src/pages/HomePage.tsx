@@ -6,6 +6,7 @@ import type { PortfolioProfile, PortfolioStatus } from '../types/portfolio';
 import { historyApi } from '../api/history';
 import { analysisApi, DuplicateTaskError } from '../api/analysis';
 import { portfolioApi } from '../api/portfolio';
+import { stocksApi, type StockQuote } from '../api/stocks';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
 import { useAnalysisStore } from '../stores/analysisStore';
 import { ReportSummary } from '../components/report';
@@ -63,6 +64,10 @@ const HomePage: React.FC = () => {
   const [notesInput, setNotesInput] = useState('');
   const [actionHistory, setActionHistory] = useState<string[]>([]);
   const [newAction, setNewAction] = useState('');
+
+  // 实时行情与 AI 目标价
+  const [watchlistQuotes, setWatchlistQuotes] = useState<Record<string, StockQuote>>({});
+  const [historicalTargets, setHistoricalTargets] = useState<Record<string, { idealBuy?: number; secondaryBuy?: number }>>({});
 
   // 建议值（来自最近一次分析）
   const [suggestedValues, setSuggestedValues] = useState<{
@@ -129,17 +134,37 @@ const HomePage: React.FC = () => {
   const selectedReportRef = useRef(selectedReport);
   selectedReportRef.current = selectedReport;
 
+  const fetchWatchlistQuotes = useCallback(async (codes: string[]) => {
+    if (codes.length === 0) return;
+    try {
+      const response = await stocksApi.getBatchQuotes(codes);
+      const next: Record<string, StockQuote> = {};
+      for (const q of response.items) {
+        next[q.stockCode] = q;
+      }
+      setWatchlistQuotes((prev) => ({ ...prev, ...next }));
+    } catch (err) {
+      console.warn('Failed to fetch watchlist quotes:', err);
+    }
+  }, []);
+
   const fetchPortfolioProfiles = useCallback(async () => {
     setIsLoadingProfiles(true);
     try {
       const response = await portfolioApi.list({ limit: 500 });
       setProfiles(response.items);
+      
+      // 首次加载后立刻拉取行情
+      const codes = response.items.map(i => i.stockCode);
+      if (codes.length > 0) {
+        fetchWatchlistQuotes(codes);
+      }
     } catch (err) {
       console.error('Failed to fetch portfolio profiles:', err);
     } finally {
       setIsLoadingProfiles(false);
     }
-  }, []);
+  }, [fetchWatchlistQuotes]);
 
   const resetTradeForm = useCallback(() => {
     setProfileStatus('watch');
@@ -238,6 +263,19 @@ const HomePage: React.FC = () => {
         setCurrentPage(page);
       }
 
+      // 更新历史目标价缓存，用于买入机会提醒
+      const targets: Record<string, { idealBuy?: number; secondaryBuy?: number }> = {};
+      for (const item of response.items) {
+        if (item.strategy && !targets[item.stockCode]) {
+          const parsePrice = (s?: string) => s ? parseFloat(s.replace(/[^0-9.]/g, '')) : undefined;
+          targets[item.stockCode] = {
+            idealBuy: parsePrice(item.strategy.idealBuy),
+            secondaryBuy: parsePrice(item.strategy.secondaryBuy),
+          };
+        }
+      }
+      setHistoricalTargets(prev => ({ ...prev, ...targets }));
+
       // 判断是否还有更多数据
       if (!silent) {
         const totalLoaded = reset ? response.items.length : historyItemsRef.current.length + response.items.length;
@@ -281,6 +319,16 @@ const HomePage: React.FC = () => {
   useEffect(() => {
     fetchPortfolioProfiles();
   }, [fetchPortfolioProfiles]);
+
+  // 定时刷新行情 (每60秒)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (profiles.length > 0 && document.visibilityState === 'visible') {
+        fetchWatchlistQuotes(profiles.map(p => p.stockCode));
+      }
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [fetchWatchlistQuotes, profiles]);
 
   // Background polling: re-fetch history every 30s for CLI-initiated analyses
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -518,6 +566,8 @@ const HomePage: React.FC = () => {
       <WatchlistPanel
         items={filteredProfiles}
         isLoading={isLoadingProfiles}
+        quotes={watchlistQuotes}
+        historicalTargets={historicalTargets}
         filter={profileFilter}
         onFilterChange={setProfileFilter}
         onUseCode={handleSelectFromWatchlist}

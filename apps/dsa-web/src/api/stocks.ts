@@ -1,9 +1,29 @@
 import apiClient from './index';
+import { toCamelCase } from './utils';
 
 export type ExtractFromImageResponse = {
   codes: string[];
   rawText?: string;
 };
+
+export interface StockQuote {
+  stockCode: string;
+  stockName?: string;
+  currentPrice: number;
+  change?: number;
+  changePercent?: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  prevClose?: number;
+  volume?: number;
+  amount?: number;
+  updateTime?: string;
+}
+
+export interface StockQuotesResponse {
+  items: StockQuote[];
+}
 
 export const stocksApi = {
   async extractFromImage(file: File): Promise<ExtractFromImageResponse> {
@@ -25,5 +45,13 @@ export const stocksApi = {
       codes: data.codes ?? [],
       rawText: data.raw_text,
     };
+  },
+
+  async getBatchQuotes(codes: string[]): Promise<StockQuotesResponse> {
+    if (codes.length === 0) return { items: [] };
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/stocks/quotes', {
+      params: { codes: codes.join(',') },
+    });
+    return toCamelCase<StockQuotesResponse>(response.data);
   },
 };
