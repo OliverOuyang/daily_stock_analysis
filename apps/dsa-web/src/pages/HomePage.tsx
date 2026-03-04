@@ -371,6 +371,8 @@ const HomePage: React.FC = () => {
             targetSell: report.strategy.takeProfit,
             stopLoss: report.strategy.stopLoss,
           });
+        } else {
+          setSuggestedValues({});
         }
       }
     } catch (err) {
@@ -556,37 +558,6 @@ const HomePage: React.FC = () => {
       setStoreError(err instanceof Error ? err.message : '删除交易信息失败');
     }
   };
-
-  const sidebarContent = (
-    <div className="flex flex-col gap-3 overflow-y-auto min-h-0 h-full pr-1 custom-scrollbar">
-      <MarketDiscoverPanel 
-        onSelectStock={handleSelectFromWatchlist}
-        onAnalyze={handleQuickAnalyzeFromWatchlist}
-      />
-      <WatchlistPanel
-        items={filteredProfiles}
-        isLoading={isLoadingProfiles}
-        quotes={watchlistQuotes}
-        historicalTargets={historicalTargets}
-        filter={profileFilter}
-        onFilterChange={setProfileFilter}
-        onUseCode={handleSelectFromWatchlist}
-        onAnalyze={(code) => { handleQuickAnalyzeFromWatchlist(code); setSidebarOpen(false); }}
-        onDelete={(code) => { handleDeleteProfile(code); }}
-      />
-      <TaskPanel tasks={activeTasks} />
-      <HistoryList
-        items={historyItems}
-        isLoading={isLoadingHistory}
-        isLoadingMore={isLoadingMore}
-        hasMore={hasMore}
-        selectedId={selectedReport?.meta.id}
-        onItemClick={(id) => { handleHistoryClick(id); setSidebarOpen(false); }}
-        onLoadMore={handleLoadMore}
-        className="flex-1 min-h-[300px]"
-      />
-    </div>
-  );
 
   return (
     <div
@@ -825,8 +796,33 @@ const HomePage: React.FC = () => {
 
 
       {/* Desktop sidebar */}
-      <div className="hidden md:flex col-start-2 row-start-2 flex-col gap-3 overflow-hidden min-h-0">
-        {sidebarContent}
+      <div className="hidden md:flex col-start-2 row-start-2 flex-col gap-3 overflow-y-auto min-h-0 h-full pr-1 custom-scrollbar">
+        <MarketDiscoverPanel 
+          onSelectStock={handleSelectFromWatchlist}
+          onAnalyze={handleQuickAnalyzeFromWatchlist}
+        />
+        <WatchlistPanel
+          items={filteredProfiles}
+          isLoading={isLoadingProfiles}
+          quotes={watchlistQuotes}
+          historicalTargets={historicalTargets}
+          filter={profileFilter}
+          onFilterChange={setProfileFilter}
+          onUseCode={handleSelectFromWatchlist}
+          onAnalyze={(code) => { handleQuickAnalyzeFromWatchlist(code); setSidebarOpen(false); }}
+          onDelete={(code) => { handleDeleteProfile(code); }}
+        />
+        <TaskPanel tasks={activeTasks} />
+        <HistoryList
+          items={historyItems}
+          isLoading={isLoadingHistory}
+          isLoadingMore={isLoadingMore}
+          hasMore={hasMore}
+          selectedId={selectedReport?.meta.id}
+          onItemClick={(id) => { handleHistoryClick(id); setSidebarOpen(false); }}
+          onLoadMore={handleLoadMore}
+          className="flex-1 min-h-[300px]"
+        />
       </div>
 
       {/* Mobile sidebar overlay */}
@@ -834,10 +830,37 @@ const HomePage: React.FC = () => {
         <div className="fixed inset-0 z-40 md:hidden" onClick={() => setSidebarOpen(false)}>
           <div className="absolute inset-0 bg-black/60" />
           <div
-            className="absolute left-0 top-0 bottom-0 w-72 flex flex-col glass-card overflow-hidden border-r border-white/10 shadow-2xl p-3"
+            className="absolute left-0 top-0 bottom-0 w-72 flex flex-col glass-card overflow-y-auto border-r border-white/10 shadow-2xl p-3"
             onClick={(e) => e.stopPropagation()}
           >
-            {sidebarContent}
+            <div className="flex flex-col gap-3">
+              <MarketDiscoverPanel 
+                onSelectStock={handleSelectFromWatchlist}
+                onAnalyze={handleQuickAnalyzeFromWatchlist}
+              />
+              <WatchlistPanel
+                items={filteredProfiles}
+                isLoading={isLoadingProfiles}
+                quotes={watchlistQuotes}
+                historicalTargets={historicalTargets}
+                filter={profileFilter}
+                onFilterChange={setProfileFilter}
+                onUseCode={handleSelectFromWatchlist}
+                onAnalyze={(code) => { handleQuickAnalyzeFromWatchlist(code); setSidebarOpen(false); }}
+                onDelete={(code) => { handleDeleteProfile(code); }}
+              />
+              <TaskPanel tasks={activeTasks} />
+              <HistoryList
+                items={historyItems}
+                isLoading={isLoadingHistory}
+                isLoadingMore={isLoadingMore}
+                hasMore={hasMore}
+                selectedId={selectedReport?.meta.id}
+                onItemClick={(id) => { handleHistoryClick(id); setSidebarOpen(false); }}
+                onLoadMore={handleLoadMore}
+                className="flex-1 min-h-[300px]"
+              />
+            </div>
           </div>
         </div>
       )}
