@@ -9,7 +9,7 @@ import { portfolioApi } from '../api/portfolio';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
 import { useAnalysisStore } from '../stores/analysisStore';
 import { ReportSummary } from '../components/report';
-import { HistoryList, WatchlistPanel } from '../components/history';
+import { HistoryList, WatchlistPanel, MarketDiscoverPanel } from '../components/history';
 import { TaskPanel } from '../components/tasks';
 import { useTaskStream } from '../hooks';
 import { clampBatchDelayMs, clampBatchSize, parseStockCodesInput } from './homepageUtils';
@@ -510,7 +510,11 @@ const HomePage: React.FC = () => {
   };
 
   const sidebarContent = (
-    <div className="flex flex-col gap-3 overflow-hidden min-h-0 h-full">
+    <div className="flex flex-col gap-3 overflow-y-auto min-h-0 h-full pr-1 custom-scrollbar">
+      <MarketDiscoverPanel 
+        onSelectStock={handleSelectFromWatchlist}
+        onAnalyze={handleQuickAnalyzeFromWatchlist}
+      />
       <WatchlistPanel
         items={filteredProfiles}
         isLoading={isLoadingProfiles}
@@ -529,7 +533,7 @@ const HomePage: React.FC = () => {
         selectedId={selectedReport?.meta.id}
         onItemClick={(id) => { handleHistoryClick(id); setSidebarOpen(false); }}
         onLoadMore={handleLoadMore}
-        className="max-h-[62vh] md:max-h-[62vh] flex-1 overflow-hidden"
+        className="flex-1 min-h-[300px]"
       />
     </div>
   );
