@@ -20,5 +20,5 @@
 - [x] `apps/dsa-web/src/components/report/ReportOverview.tsx`: render structured `strategy.positionActions` first, fallback to text extraction.
 - [x] `apps/dsa-web/src/components/history/MarketDiscoverPanel.tsx`: support `onFavoriteAdded` callback to refresh watchlist after 收藏.
 - [x] `apps/dsa-web/src/pages/HomePage.tsx`: fix market discover Analyze action to trigger analyze flow (instead of only selecting symbol).
-- [ ] Add backend test case asserting `ReportStrategy.position_actions` is present in `/analysis/tasks/{id}` completed response when analyzer returns structured actions.
+- [x] Add backend test case asserting `ReportStrategy.position_actions` is present in `/analysis/status/{id}` completed response when analyzer returns structured actions.
 - [ ] Add frontend E2E smoke test: 收藏 from market discover -> watchlist shows new symbol -> click symbol loads latest report + profile.
