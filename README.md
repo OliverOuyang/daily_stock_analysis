@@ -270,22 +270,51 @@ python main.py
 
 ### 启动方式
 
-1. **启动服务**（默认会自动编译前端）
+1. **稳定模式（推荐，避免 8000 偶发不可用）**
+   ```bash
+   ./scripts/run_local_webui.sh
+   ```
+   - 默认使用 `WEBUI_AUTO_BUILD=false`，不在启动阶段执行 `npm install`
+   - 启动脚本会做端口占用检查和健康检查（`/api/health`）
+
+2. **需要更新前端时**
+   ```bash
+   ./scripts/build_frontend.sh
+   ./scripts/run_local_webui.sh
+   ```
+   或使用一条命令：
+   ```bash
+   ./scripts/run_local_webui_build_then_start.sh
+   ```
+
+3. **兼容旧启动方式**（会自动编译前端，启动可能较慢）
    ```bash
    python main.py --webui       # 启动 Web 界面 + 执行定时分析
    python main.py --webui-only  # 仅启动 Web 界面
    ```
-   启动时会在 `apps/dsa-web` 自动执行 `npm install && npm run build`。
-   如需关闭自动构建，设置 `WEBUI_AUTO_BUILD=false`，并改为手动执行：
+   启动时会在 `apps/dsa-web` 自动执行 `npm install && npm run build`。如需关闭自动构建：
    ```bash
-   cd ./apps/dsa-web
-   npm install && npm run build
-   cd ../..
+   WEBUI_AUTO_BUILD=false python main.py --webui-only
    ```
 
 访问 `http://127.0.0.1:8000` 即可使用。
 
 > 也可以使用 `python main.py --serve` (等效命令)
+
+### 本地排障
+
+- 检查服务是否监听：
+  ```bash
+  lsof -iTCP:8000 -sTCP:LISTEN -n -P
+  ```
+- 检查健康状态：
+  ```bash
+  curl -fsS http://127.0.0.1:8000/api/health
+  ```
+- 查看最近启动日志：
+  ```bash
+  tail -n 80 /tmp/dsa8000.log
+  ```
 
 ## 🗺️ Roadmap
 
