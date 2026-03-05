@@ -18,4 +18,26 @@ export interface MarketDiscoverResponse {
   triggeredTasks: number;
   duplicateTasks: number;
   sectors: SectorDiscoverItem[];
+  cacheHit?: boolean;
+  cacheAgeSeconds?: number;
+  cacheTtlSeconds?: number;
+}
+
+export interface MarketPrescoreStartResponse {
+  runId: string;
+  totalTasks: number;
+  triggeredTasks: number;
+  duplicateTasks: number;
+  status: 'pending' | 'running' | 'completed';
+}
+
+export interface MarketPrescoreStatusResponse {
+  runId: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  progress: number;
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  diagnostics?: string;
+  result?: MarketDiscoverResponse;
 }

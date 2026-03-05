@@ -29,3 +29,22 @@ class MarketDiscoverResponse(BaseModel):
     cache_hit: bool = Field(False, description="是否命中缓存")
     cache_age_seconds: Optional[int] = Field(None, description="缓存年龄(秒)")
     cache_ttl_seconds: Optional[int] = Field(None, description="缓存TTL(秒)")
+
+
+class MarketPrescoreStartResponse(BaseModel):
+    run_id: str
+    total_tasks: int
+    triggered_tasks: int
+    duplicate_tasks: int
+    status: str = Field(..., description="pending/running/completed")
+
+
+class MarketPrescoreStatusResponse(BaseModel):
+    run_id: str
+    status: str = Field(..., description="pending/running/completed/failed")
+    progress: int = Field(..., ge=0, le=100)
+    total_tasks: int
+    completed_tasks: int
+    failed_tasks: int
+    diagnostics: Optional[str] = None
+    result: Optional[MarketDiscoverResponse] = None

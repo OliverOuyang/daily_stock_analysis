@@ -14,6 +14,7 @@ import src.auth as auth
 from api.app import create_app
 from src.config import Config
 from api.v1.endpoints import market as market_endpoint
+from api.v1.schemas.market import MarketDiscoverResponse, SectorDiscoverItem, MarketLeader
 
 
 class _FakeTaskQueue:
@@ -52,6 +53,7 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         os.environ.pop("DATABASE_PATH", None)
         os.environ.pop("MARKET_DISCOVER_CACHE_TTL_SECONDS", None)
         market_endpoint._DISCOVER_CACHE.clear()
+        market_endpoint._PRESCORE_RUNS.clear()
         self.temp_dir.cleanup()
 
     @patch("api.v1.endpoints.market.get_task_queue")
@@ -254,6 +256,71 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         inv_data = inv.json()
         self.assertTrue(inv_data["success"])
         self.assertGreaterEqual(inv_data["data"]["removed_entries"], 1)
+
+    @patch("api.v1.endpoints.market.get_task_queue")
+    @patch("api.v1.endpoints.market._discover_hot_sectors")
+    def test_market_prescore_start_returns_run_id(self, mock_discover, mock_get_queue) -> None:
+        mock_discover.return_value = (
+            "akshare",
+            [
+                {
+                    "sector_name": "有色金属",
+                    "change_pct": 2.3,
+                    "leaders": [
+                        {"stock_code": "000933", "stock_name": "神火股份", "change_pct": 5.1},
+                    ],
+                }
+            ],
+        )
+        mock_get_queue.return_value = _FakeTaskQueue()
+
+        resp = self.client.post("/api/v1/market/discover/prescore/start?top_n=3&leaders_per_sector=2&min_score=70")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("run_id", data)
+        self.assertIn(data["status"], ("running", "completed"))
+        self.assertGreaterEqual(data["total_tasks"], 0)
+
+    @patch("api.v1.endpoints.market.run_market_discover_scan")
+    @patch("api.v1.endpoints.market._task_is_done", return_value=(True, False))
+    def test_market_prescore_status_completed_with_result(self, _mock_done, mock_scan) -> None:
+        mock_scan.return_value = MarketDiscoverResponse(
+            source="akshare",
+            total_sectors=1,
+            triggered_tasks=0,
+            duplicate_tasks=0,
+            sectors=[
+                SectorDiscoverItem(
+                    sector_name="有色金属",
+                    change_pct=2.3,
+                    leaders=[MarketLeader(stock_code="000933", stock_name="神火股份", change_pct=5.1, latest_score=82)],
+                )
+            ],
+            cache_hit=False,
+            cache_age_seconds=None,
+            cache_ttl_seconds=1200,
+        )
+
+        run_id = "run_test_1"
+        market_endpoint._PRESCORE_RUNS[run_id] = {
+            "ts": 9999999999,
+            "status": "running",
+            "task_ids": ["task_1"],
+            "total_tasks": 1,
+            "completed_tasks": 0,
+            "failed_tasks": 0,
+            "diagnostics": None,
+            "params": {"top_n": 5, "leaders_per_sector": 3, "min_score": 70, "sector_keyword": None, "min_change_pct": None},
+            "result": None,
+        }
+
+        resp = self.client.get(f"/api/v1/market/discover/prescore/{run_id}")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], "completed")
+        self.assertEqual(data["progress"], 100)
+        self.assertIsNotNone(data["result"])
+        self.assertEqual(data["result"]["sectors"][0]["leaders"][0]["stock_code"], "000933")
 
 
 if __name__ == "__main__":

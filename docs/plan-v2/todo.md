@@ -12,9 +12,9 @@
 - [x] `ReportStrategy` 增加 `*_value` 字段并前后端透传
 
 ## Phase 3
-- [ ] 市场异动 prescore start/poll 接口
-- [ ] 板块筛选参数 `sector_keyword/min_change_pct`
-- [ ] 前端预扫描进度与空结果诊断展示
+- [x] 市场异动 prescore start/poll 接口
+- [x] 板块筛选参数 `sector_keyword/min_change_pct`
+- [x] 前端预扫描进度与空结果诊断展示
 
 ## Phase 4
 - [x] 首页内嵌资产诊断卡

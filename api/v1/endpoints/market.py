@@ -16,12 +16,19 @@ import os
 import re
 import threading
 import time
+import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Query
 
 from api.v1.schemas.common import ErrorResponse, SuccessResponse
-from api.v1.schemas.market import MarketDiscoverResponse, MarketLeader, SectorDiscoverItem
+from api.v1.schemas.market import (
+    MarketDiscoverResponse,
+    MarketLeader,
+    MarketPrescoreStartResponse,
+    MarketPrescoreStatusResponse,
+    SectorDiscoverItem,
+)
 from data_provider.base import canonical_stock_code
 from src.storage import get_db
 from src.services.task_queue import DuplicateTaskError, get_task_queue
@@ -34,7 +41,10 @@ router = APIRouter()
 _MARKET_DISCOVER_CACHE_TTL_SECONDS = int(os.getenv("MARKET_DISCOVER_CACHE_TTL_SECONDS", "1200"))
 _MIN_MARKET_CAP_BILLION = float(os.getenv("MARKET_DISCOVER_MIN_MARKET_CAP_BILLION", "30"))
 _CACHE_LOCK = threading.Lock()
-_DISCOVER_CACHE: Dict[Tuple[int, int, Optional[int]], Dict[str, Any]] = {}
+_DISCOVER_CACHE: Dict[Tuple[int, int, Optional[int], str, Optional[float]], Dict[str, Any]] = {}
+_PRESCORE_LOCK = threading.Lock()
+_PRESCORE_TTL_SECONDS = int(os.getenv("MARKET_PRESCORE_TTL_SECONDS", "3600"))
+_PRESCORE_RUNS: Dict[str, Dict[str, Any]] = {}
 
 
 _MOCK_HOT_SECTORS: List[Dict[str, Any]] = [
@@ -136,7 +146,10 @@ def _cache_key(
     return top_n, leaders_per_sector, min_score, (sector_keyword or "").strip().lower(), min_change_pct
 
 
-def _get_cached_discover_result(key: Tuple[int, int, Optional[int]], ttl_seconds: int) -> Optional[Dict[str, Any]]:
+def _get_cached_discover_result(
+    key: Tuple[int, int, Optional[int], str, Optional[float]],
+    ttl_seconds: int,
+) -> Optional[Dict[str, Any]]:
     now = time.time()
     with _CACHE_LOCK:
         item = _DISCOVER_CACHE.get(key)
@@ -156,7 +169,7 @@ def _get_cached_discover_result(key: Tuple[int, int, Optional[int]], ttl_seconds
 
 
 def _set_cached_discover_result(
-    key: Tuple[int, int, Optional[int]],
+    key: Tuple[int, int, Optional[int], str, Optional[float]],
     source: str,
     sectors: List[Dict[str, Any]],
     analysis_triggered: bool = False,
@@ -170,7 +183,7 @@ def _set_cached_discover_result(
         }
 
 
-def _mark_cached_analysis_triggered(key: Tuple[int, int, Optional[int]]) -> None:
+def _mark_cached_analysis_triggered(key: Tuple[int, int, Optional[int], str, Optional[float]]) -> None:
     with _CACHE_LOCK:
         item = _DISCOVER_CACHE.get(key)
         if item:
@@ -182,6 +195,38 @@ def _clear_discover_cache() -> int:
         count = len(_DISCOVER_CACHE)
         _DISCOVER_CACHE.clear()
     return count
+
+
+def _cleanup_prescore_runs() -> None:
+    now = time.time()
+    with _PRESCORE_LOCK:
+        stale_ids = [rid for rid, item in _PRESCORE_RUNS.items() if now - float(item.get("ts", 0)) > _PRESCORE_TTL_SECONDS]
+        for rid in stale_ids:
+            _PRESCORE_RUNS.pop(rid, None)
+
+
+def _task_is_done(task_id: str) -> Tuple[bool, bool]:
+    """
+    Returns:
+      (is_done, is_failed)
+    """
+    task_queue = get_task_queue()
+    task = task_queue.get_task(task_id)
+    if task is not None:
+        status = str(task.status.value if hasattr(task.status, "value") else task.status)
+        if status == "failed":
+            return True, True
+        if status == "completed":
+            return True, False
+        return False, False
+
+    try:
+        records = get_db().get_analysis_history(query_id=task_id, limit=1)
+        if records:
+            return True, False
+    except Exception:
+        pass
+    return False, False
 
 
 def _discover_hot_sectors(top_n: int, leaders_per_sector: int) -> Tuple[str, List[Dict[str, Any]]]:
@@ -543,6 +588,142 @@ def discover_market(
                 for x in _MOCK_HOT_SECTORS
             ],
         )
+
+
+@router.post(
+    "/discover/prescore/start",
+    response_model=MarketPrescoreStartResponse,
+    responses={500: {"model": ErrorResponse}},
+    summary="启动市场异动预评分任务",
+)
+def start_market_prescore(
+    top_n: int = Query(5, ge=1, le=20, description="行业数量"),
+    leaders_per_sector: int = Query(3, ge=1, le=10, description="每个行业龙头数量"),
+    min_score: Optional[int] = Query(70, ge=0, le=100, description="最终结果筛选最低分"),
+    sector_keyword: Optional[str] = Query(None, description="板块关键词过滤"),
+    min_change_pct: Optional[float] = Query(None, description="板块最小涨跌幅过滤"),
+) -> MarketPrescoreStartResponse:
+    _cleanup_prescore_runs()
+    try:
+        scan = run_market_discover_scan(
+            top_n=top_n,
+            leaders_per_sector=leaders_per_sector,
+            trigger_analysis=True,
+            use_cache=False,
+            min_score=None,  # 预评分阶段不按分数过滤，先触发分析
+            sector_keyword=sector_keyword,
+            min_change_pct=min_change_pct,
+        )
+        task_ids = [
+            leader.task_id
+            for sec in scan.sectors
+            for leader in sec.leaders
+            if leader.task_id
+        ]
+        run_id = uuid.uuid4().hex
+        status = "completed" if len(task_ids) == 0 else "running"
+        diagnostics = "未触发新任务（可能命中重复任务或无可分析标的）" if len(task_ids) == 0 else None
+        with _PRESCORE_LOCK:
+            _PRESCORE_RUNS[run_id] = {
+                "ts": time.time(),
+                "status": status,
+                "task_ids": task_ids,
+                "total_tasks": len(task_ids),
+                "completed_tasks": len(task_ids) if len(task_ids) == 0 else 0,
+                "failed_tasks": 0,
+                "diagnostics": diagnostics,
+                "params": {
+                    "top_n": top_n,
+                    "leaders_per_sector": leaders_per_sector,
+                    "min_score": min_score,
+                    "sector_keyword": sector_keyword,
+                    "min_change_pct": min_change_pct,
+                },
+                "result": scan if status == "completed" else None,
+            }
+        return MarketPrescoreStartResponse(
+            run_id=run_id,
+            total_tasks=len(task_ids),
+            triggered_tasks=scan.triggered_tasks,
+            duplicate_tasks=scan.duplicate_tasks,
+            status=status,
+        )
+    except Exception as e:
+        logger.error("启动预评分失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": "启动预评分失败"})
+
+
+@router.get(
+    "/discover/prescore/{run_id}",
+    response_model=MarketPrescoreStatusResponse,
+    responses={404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="查询预评分任务状态",
+)
+def get_market_prescore_status(run_id: str) -> MarketPrescoreStatusResponse:
+    _cleanup_prescore_runs()
+    with _PRESCORE_LOCK:
+        run = _PRESCORE_RUNS.get(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail={"error": "not_found", "message": "prescore run 不存在或已过期"})
+
+    status = str(run.get("status") or "running")
+    total_tasks = int(run.get("total_tasks") or 0)
+    completed_tasks = int(run.get("completed_tasks") or 0)
+    failed_tasks = int(run.get("failed_tasks") or 0)
+    diagnostics = run.get("diagnostics")
+    result = run.get("result")
+
+    if status in ("running", "pending"):
+        done = 0
+        failed = 0
+        for tid in run.get("task_ids", []):
+            is_done, is_failed = _task_is_done(str(tid))
+            if is_done:
+                done += 1
+            if is_failed:
+                failed += 1
+        completed_tasks = done
+        failed_tasks = failed
+        if total_tasks == 0 or done >= total_tasks:
+            status = "completed"
+            try:
+                params = run.get("params", {})
+                result = run_market_discover_scan(
+                    top_n=int(params.get("top_n", 5)),
+                    leaders_per_sector=int(params.get("leaders_per_sector", 3)),
+                    trigger_analysis=False,
+                    use_cache=False,
+                    min_score=params.get("min_score"),
+                    sector_keyword=params.get("sector_keyword"),
+                    min_change_pct=params.get("min_change_pct"),
+                )
+                if (result.total_sectors == 0) or all(len(sec.leaders) == 0 for sec in result.sectors):
+                    diagnostics = diagnostics or "预评分已完成，但当前筛选条件下无达标标的"
+            except Exception as e:
+                status = "failed"
+                diagnostics = f"预评分完成但结果聚合失败: {e}"
+                result = None
+
+        with _PRESCORE_LOCK:
+            if run_id in _PRESCORE_RUNS:
+                _PRESCORE_RUNS[run_id]["status"] = status
+                _PRESCORE_RUNS[run_id]["completed_tasks"] = completed_tasks
+                _PRESCORE_RUNS[run_id]["failed_tasks"] = failed_tasks
+                _PRESCORE_RUNS[run_id]["diagnostics"] = diagnostics
+                _PRESCORE_RUNS[run_id]["result"] = result
+                _PRESCORE_RUNS[run_id]["ts"] = time.time()
+
+    progress = 100 if total_tasks == 0 else int(round((completed_tasks / max(total_tasks, 1)) * 100))
+    return MarketPrescoreStatusResponse(
+        run_id=run_id,
+        status=status,
+        progress=progress,
+        total_tasks=total_tasks,
+        completed_tasks=completed_tasks,
+        failed_tasks=failed_tasks,
+        diagnostics=diagnostics,
+        result=result,
+    )
 
 
 @router.post(

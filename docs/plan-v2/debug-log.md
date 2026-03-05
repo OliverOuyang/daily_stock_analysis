@@ -38,6 +38,16 @@
   - `./venv/bin/pytest -q tests/test_portfolio_review_api.py tests/test_stocks_resolve_api.py tests/test_market_discover_api.py` 通过。
   - `apps/dsa-web npm run build` 通过。
 
+## 2026-03-05 市场异动预评分 run_id 化
+- 后端新增：
+  - `POST /api/v1/market/discover/prescore/start`
+  - `GET /api/v1/market/discover/prescore/{run_id}`
+- 前端市场异动面板已切换为 run_id 轮询，不再直接拼 task_id 轮询。
+- 支持筛选参数：`min_score / sector_keyword / min_change_pct`。
+- 测试：
+  - `./venv/bin/pytest -q tests/test_market_discover_api.py tests/test_portfolio_review_api.py tests/test_stocks_resolve_api.py` 通过。
+  - `apps/dsa-web npm run build` 通过。
+
 ## Debug 模板
 - 问题：
 - 复现步骤：

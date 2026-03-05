@@ -2,7 +2,6 @@ import type React from 'react';
 import { useState, useEffect } from 'react';
 import type { MarketDiscoverResponse, SectorDiscoverItem } from '../../types/market';
 import { marketApi } from '../../api/market';
-import { analysisApi } from '../../api/analysis';
 import { portfolioApi } from '../../api/portfolio';
 
 interface MarketDiscoverPanelProps {
@@ -77,38 +76,34 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
     setIsPrescoreRunning(true);
     setPrescoreProgress('触发预评分任务...');
     try {
-      const start = await marketApi.discover({
-        triggerAnalysis: true,
-        minScore: 0, // 预评分阶段先不按分数过滤，尽量覆盖候选
+      const start = await marketApi.startPrescore({
+        minScore,
         sectorKeyword: sectorKeyword.trim() || undefined,
         minChangePct: minChangePct.trim() === '' ? undefined : parsedMinChangePct,
       });
-
-      const taskIds = (start.sectors || [])
-        .flatMap((s) => s.leaders || [])
-        .map((l) => l.taskId)
-        .filter((id): id is string => Boolean(id));
-
-      if (taskIds.length === 0) {
-        setPrescoreProgress('未触发新任务，正在刷新...');
-        await fetchDiscovery();
-        setToast('预评分完成（无新增任务）');
-        setTimeout(() => setToast(null), 1800);
-        return;
-      }
-
-      const deadline = Date.now() + 60_000;
-      let done = 0;
-      while (Date.now() < deadline && done < taskIds.length) {
-        const statuses = await Promise.allSettled(taskIds.map((id) => analysisApi.getStatus(id)));
-        done = statuses.filter((s) => s.status === 'fulfilled' && (s.value.status === 'completed' || s.value.status === 'failed')).length;
-        setPrescoreProgress(`预评分进行中 ${done}/${taskIds.length}`);
-        if (done >= taskIds.length) break;
+      const runId = start.runId;
+      const deadline = Date.now() + 90_000;
+      let finalDiagnostics = '';
+      let hasResult = false;
+      while (Date.now() < deadline) {
+        const status = await marketApi.getPrescoreStatus(runId);
+        setPrescoreProgress(`预评分进行中 ${status.completedTasks}/${status.totalTasks} (${status.progress}%)`);
+        if (status.diagnostics) finalDiagnostics = status.diagnostics;
+        if (status.status === 'completed') {
+          if (status.result) {
+            setData(status.result);
+            hasResult = true;
+          }
+          break;
+        }
+        if (status.status === 'failed') {
+          throw new Error(status.diagnostics || '预评分任务失败');
+        }
         await new Promise((r) => setTimeout(r, 2500));
       }
-      setPrescoreProgress('预评分完成，刷新筛选结果...');
-      await fetchDiscovery();
-      setToast('预评分扫描完成');
+      setPrescoreProgress('预评分完成');
+      if (!hasResult) await fetchDiscovery();
+      setToast(finalDiagnostics || '预评分扫描完成');
       setTimeout(() => setToast(null), 1800);
     } catch (e) {
       setToast('预评分扫描失败');
