@@ -28,6 +28,25 @@ VALID_STATUS = {"holding", "watch", "candidate", "archived"}
 
 
 @router.get(
+    "/review",
+    responses={500: {"model": ErrorResponse}},
+    summary="资产组合诊断",
+)
+def review_portfolio(
+    available_cash: float = Query(0.0, ge=0, description="可用现金"),
+    min_score: int = Query(70, ge=0, le=100, description="候选最低评分"),
+):
+    """基于当前 holding 持仓给出组合诊断。"""
+    try:
+        from src.agent.tools.data_tools import _handle_portfolio_review
+
+        return _handle_portfolio_review(available_cash=available_cash, min_score=min_score)
+    except Exception as e:
+        logger.error("资产组合诊断失败: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail={"error": "internal_error", "message": "资产组合诊断失败"})
+
+
+@router.get(
     "/profiles",
     response_model=PortfolioProfileListResponse,
     responses={500: {"model": ErrorResponse}},

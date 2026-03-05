@@ -56,6 +56,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _to_float_or_none(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        s = str(v).strip()
+        if not s:
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+
 # ============================================================
 # POST /analyze - 触发股票分析
 # ============================================================
@@ -468,9 +482,13 @@ def get_analysis_status(task_id: str) -> TaskStatus:
                 ),
                 strategy=ReportStrategy(
                     ideal_buy=str(getattr(record, 'ideal_buy', None)) if getattr(record, 'ideal_buy', None) is not None else None,
+                    ideal_buy_value=_to_float_or_none(getattr(record, 'ideal_buy', None)),
                     secondary_buy=str(getattr(record, 'secondary_buy', None)) if getattr(record, 'secondary_buy', None) is not None else None,
+                    secondary_buy_value=_to_float_or_none(getattr(record, 'secondary_buy', None)),
                     stop_loss=str(getattr(record, 'stop_loss', None)) if getattr(record, 'stop_loss', None) is not None else None,
+                    stop_loss_value=_to_float_or_none(getattr(record, 'stop_loss', None)),
                     take_profit=str(getattr(record, 'take_profit', None)) if getattr(record, 'take_profit', None) is not None else None,
+                    take_profit_value=_to_float_or_none(getattr(record, 'take_profit', None)),
                     position_actions=position_actions,
                 ),
             ).model_dump()
@@ -557,9 +575,13 @@ def _build_analysis_report(
     if strategy_data:
         strategy = ReportStrategy(
             ideal_buy=strategy_data.get("ideal_buy"),
+            ideal_buy_value=_to_float_or_none(strategy_data.get("ideal_buy_value") or strategy_data.get("ideal_buy")),
             secondary_buy=strategy_data.get("secondary_buy"),
+            secondary_buy_value=_to_float_or_none(strategy_data.get("secondary_buy_value") or strategy_data.get("secondary_buy")),
             stop_loss=strategy_data.get("stop_loss"),
+            stop_loss_value=_to_float_or_none(strategy_data.get("stop_loss_value") or strategy_data.get("stop_loss")),
             take_profit=strategy_data.get("take_profit"),
+            take_profit_value=_to_float_or_none(strategy_data.get("take_profit_value") or strategy_data.get("take_profit")),
             position_actions=strategy_data.get("position_actions"),
         )
 

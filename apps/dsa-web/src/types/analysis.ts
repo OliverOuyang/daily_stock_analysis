@@ -52,9 +52,13 @@ export interface ReportPositionActions {
 /** 策略点位区 */
 export interface ReportStrategy {
   idealBuy?: string;
+  idealBuyValue?: number;
   secondaryBuy?: string;
+  secondaryBuyValue?: number;
   stopLoss?: string;
+  stopLossValue?: number;
   takeProfit?: string;
+  takeProfitValue?: number;
   positionActions?: ReportPositionActions;
 }
 

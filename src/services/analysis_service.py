@@ -11,12 +11,25 @@
 """
 
 import logging
+import re
 import uuid
 from typing import Optional, Dict, Any
 
 from src.repositories.analysis_repo import AnalysisRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_price_value(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip()
+    if not s:
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?", s)
+    return float(m.group()) if m else None
 
 
 class AnalysisService:
@@ -143,9 +156,13 @@ class AnalysisService:
             },
             "strategy": {
                 "ideal_buy": sniper_points.get("ideal_buy"),
+                "ideal_buy_value": _parse_price_value(sniper_points.get("ideal_buy")),
                 "secondary_buy": sniper_points.get("secondary_buy"),
+                "secondary_buy_value": _parse_price_value(sniper_points.get("secondary_buy")),
                 "stop_loss": sniper_points.get("stop_loss"),
+                "stop_loss_value": _parse_price_value(sniper_points.get("stop_loss")),
                 "take_profit": sniper_points.get("take_profit"),
+                "take_profit_value": _parse_price_value(sniper_points.get("take_profit")),
                 "position_actions": position_actions,
             },
             "details": {

@@ -199,9 +199,13 @@ def get_history_detail(
         
         strategy = ReportStrategy(
             ideal_buy=result.get("ideal_buy"),
+            ideal_buy_value=result.get("ideal_buy_value"),
             secondary_buy=result.get("secondary_buy"),
+            secondary_buy_value=result.get("secondary_buy_value"),
             stop_loss=result.get("stop_loss"),
+            stop_loss_value=result.get("stop_loss_value"),
             take_profit=result.get("take_profit"),
+            take_profit_value=result.get("take_profit_value"),
             position_actions=result.get("position_actions")
         )
         

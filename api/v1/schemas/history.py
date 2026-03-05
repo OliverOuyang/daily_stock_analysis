@@ -142,9 +142,13 @@ class ReportStrategy(BaseModel):
     """策略点位区"""
     
     ideal_buy: Optional[str] = Field(None, description="理想买入价")
+    ideal_buy_value: Optional[float] = Field(None, description="理想买入价(数值)")
     secondary_buy: Optional[str] = Field(None, description="第二买入价")
+    secondary_buy_value: Optional[float] = Field(None, description="第二买入价(数值)")
     stop_loss: Optional[str] = Field(None, description="止损价")
+    stop_loss_value: Optional[float] = Field(None, description="止损价(数值)")
     take_profit: Optional[str] = Field(None, description="止盈价")
+    take_profit_value: Optional[float] = Field(None, description="止盈价(数值)")
     position_actions: Optional[ReportPositionActions] = Field(None, description="持仓动作建议")
 
 

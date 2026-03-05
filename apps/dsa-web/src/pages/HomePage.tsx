@@ -2,7 +2,7 @@ import type React from 'react';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { HistoryItem, AnalysisReport, TaskInfo } from '../types/analysis';
-import type { PortfolioProfile, PortfolioStatus } from '../types/portfolio';
+import type { PortfolioProfile, PortfolioReviewResult, PortfolioStatus } from '../types/portfolio';
 import { historyApi } from '../api/history';
 import { analysisApi } from '../api/analysis';
 import { portfolioApi } from '../api/portfolio';
@@ -57,6 +57,7 @@ const HomePage: React.FC = () => {
 
   const [availableCash, setAvailableCash] = useState('');
   const [isAnalyzingPortfolio, setIsAnalyzingPortfolio] = useState(false);
+  const [portfolioReview, setPortfolioReview] = useState<PortfolioReviewResult | null>(null);
 
   const [watchlistQuotes, setWatchlistQuotes] = useState<Record<string, StockQuote>>({});
   const [historicalTargets, setHistoricalTargets] = useState<Record<string, { idealBuy?: number; secondaryBuy?: number }>>({});
@@ -65,6 +66,7 @@ const HomePage: React.FC = () => {
     targetBuy?: string;
     targetSell?: string;
     stopLoss?: string;
+    sourceAt?: string;
   }>({});
   const [nameResolveToken, setNameResolveToken] = useState('');
   const [nameResolveOptions, setNameResolveOptions] = useState<StockResolveItem[]>([]);
@@ -234,7 +236,17 @@ const HomePage: React.FC = () => {
       if (requestId === analysisRequestIdRef.current) {
         setSelectedReport(report);
         if (report.strategy) {
-          setSuggestedValues({ targetBuy: report.strategy.idealBuy || report.strategy.secondaryBuy, targetSell: report.strategy.takeProfit, stopLoss: report.strategy.stopLoss });
+          const toStringValue = (value?: number, raw?: string) => {
+            if (value !== undefined && value !== null) return String(value);
+            return raw;
+          };
+          setSuggestedValues({
+            targetBuy: toStringValue(report.strategy.idealBuyValue, report.strategy.idealBuy)
+              || toStringValue(report.strategy.secondaryBuyValue, report.strategy.secondaryBuy),
+            targetSell: toStringValue(report.strategy.takeProfitValue, report.strategy.takeProfit),
+            stopLoss: toStringValue(report.strategy.stopLossValue, report.strategy.stopLoss),
+            sourceAt: report.meta.createdAt,
+          });
         } else setSuggestedValues({});
       }
     } catch (err) { setStoreError('报告加载失败'); }
@@ -361,8 +373,12 @@ const HomePage: React.FC = () => {
   const handleAnalyzePortfolio = async () => {
     setIsAnalyzingPortfolio(true);
     try {
-      const holdings = profiles.filter(p => p.status === 'holding').map(h => `${h.stockCode}(${h.shares}股)`).join(',');
-      navigate(`/chat?stock=PORTFOLIO&mode=review&cash=${availableCash}&holdings=${holdings}`);
+      const n = Number(availableCash);
+      const review = await portfolioApi.review({
+        availableCash: Number.isFinite(n) ? n : 0,
+        minScore: 70,
+      });
+      setPortfolioReview(review);
     } finally { setIsAnalyzingPortfolio(false); }
   };
 
@@ -466,12 +482,56 @@ const HomePage: React.FC = () => {
               <div className="flex gap-1.5">
                 <input value={availableCash} onChange={e => setAvailableCash(e.target.value)} placeholder="可用现金" className="input-terminal py-1 px-2 text-[11px] flex-1" />
                 <button onClick={handleAnalyzePortfolio} disabled={isAnalyzingPortfolio} className="px-2 py-1 rounded bg-amber-500/20 text-amber-300 text-[10px] border border-amber-500/30 disabled:opacity-60">{isAnalyzingPortfolio ? '诊断中...' : '诊断'}</button>
+                <button
+                  onClick={() => navigate(`/chat?stock=PORTFOLIO&mode=review&cash=${availableCash}`)}
+                  className="px-2 py-1 rounded bg-white/10 text-secondary text-[10px] border border-white/20"
+                >
+                  深聊
+                </button>
               </div>
               <div className="grid grid-cols-3 gap-1.5">
-                <div className="space-y-1"><div className="flex justify-between text-[9px] text-muted">入场 {suggestedValues.targetBuy && <span onClick={() => setTargetBuyInput(suggestedValues.targetBuy!.replace(/[^0-9.]/g,''))} className="text-cyan cursor-pointer">点</span>}</div><input value={targetBuyInput} onChange={e=>setTargetBuyInput(e.target.value)} className="input-terminal py-1 px-2 text-[10px] w-full" /></div>
-                <div className="space-y-1"><div className="flex justify-between text-[9px] text-muted">止盈 {suggestedValues.targetSell && <span onClick={() => setTargetSellInput(suggestedValues.targetSell!.replace(/[^0-9.]/g,''))} className="text-emerald-400 cursor-pointer">点</span>}</div><input value={targetSellInput} onChange={e=>setTargetSellInput(e.target.value)} className="input-terminal py-1 px-2 text-[10px] w-full" /></div>
-                <div className="space-y-1"><div className="flex justify-between text-[9px] text-muted">止损 {suggestedValues.stopLoss && <span onClick={() => setStopLossInput(suggestedValues.stopLoss!.replace(/[^0-9.]/g,''))} className="text-rose-400 cursor-pointer">点</span>}</div><input value={stopLossInput} onChange={e=>setStopLossInput(e.target.value)} className="input-terminal py-1 px-2 text-[10px] w-full" /></div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[9px] text-muted">
+                    入场(我的)
+                    {suggestedValues.targetBuy && <span onClick={() => setTargetBuyInput(suggestedValues.targetBuy!.replace(/[^0-9.]/g,''))} className="text-cyan cursor-pointer">同步AI</span>}
+                  </div>
+                  <input value={targetBuyInput} onChange={e=>setTargetBuyInput(e.target.value)} className="input-terminal py-1 px-2 text-[10px] w-full" />
+                  <div className="text-[9px] text-cyan/80 truncate">AI: {suggestedValues.targetBuy || '--'}</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[9px] text-muted">
+                    止盈(我的)
+                    {suggestedValues.targetSell && <span onClick={() => setTargetSellInput(suggestedValues.targetSell!.replace(/[^0-9.]/g,''))} className="text-emerald-400 cursor-pointer">同步AI</span>}
+                  </div>
+                  <input value={targetSellInput} onChange={e=>setTargetSellInput(e.target.value)} className="input-terminal py-1 px-2 text-[10px] w-full" />
+                  <div className="text-[9px] text-emerald-300/80 truncate">AI: {suggestedValues.targetSell || '--'}</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-[9px] text-muted">
+                    止损(我的)
+                    {suggestedValues.stopLoss && <span onClick={() => setStopLossInput(suggestedValues.stopLoss!.replace(/[^0-9.]/g,''))} className="text-rose-400 cursor-pointer">同步AI</span>}
+                  </div>
+                  <input value={stopLossInput} onChange={e=>setStopLossInput(e.target.value)} className="input-terminal py-1 px-2 text-[10px] w-full" />
+                  <div className="text-[9px] text-rose-300/80 truncate">AI: {suggestedValues.stopLoss || '--'}</div>
+                </div>
               </div>
+              {suggestedValues.sourceAt && (
+                <div className="text-[9px] text-muted">AI建议来源: {suggestedValues.sourceAt}</div>
+              )}
+              {portfolioReview && (
+                <div className="rounded border border-amber-500/20 bg-amber-500/5 p-2 space-y-1">
+                  <div className="text-[10px] text-amber-300 font-medium">组合诊断</div>
+                  <div className="text-[10px] text-secondary">
+                    行业集中: {portfolioReview.riskDiversification?.industryConcentration || '--'} | 暴露 {portfolioReview.riskDiversification?.topIndustryExposurePct ?? '--'}%
+                  </div>
+                  <div className="text-[10px] text-secondary">
+                    总仓位: {portfolioReview.positionRecommendation?.totalPositionPct ?? '--'}% | 建议区间 {portfolioReview.positionRecommendation?.suggestedRangePct || '--'}
+                  </div>
+                  <div className="text-[10px] text-secondary truncate">
+                    子弹方案: {(portfolioReview.bulletPlan?.buyList || []).slice(0, 3).map((x) => `${x.stockName || x.stockCode}`).join('、') || '暂无'}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="xl:col-span-4 space-y-2">

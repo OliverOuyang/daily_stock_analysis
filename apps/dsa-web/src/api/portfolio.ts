@@ -1,6 +1,6 @@
 import apiClient from './index';
 import { toCamelCase } from './utils';
-import type { PortfolioProfile, PortfolioProfileListResponse, PortfolioUpsertRequest } from '../types/portfolio';
+import type { PortfolioProfile, PortfolioProfileListResponse, PortfolioReviewResult, PortfolioUpsertRequest } from '../types/portfolio';
 
 export const portfolioApi = {
   list: async (params?: {
@@ -46,5 +46,15 @@ export const portfolioApi = {
 
   remove: async (stockCode: string): Promise<void> => {
     await apiClient.delete(`/api/v1/portfolio/profiles/${encodeURIComponent(stockCode)}`);
+  },
+
+  review: async (params?: { availableCash?: number; minScore?: number }): Promise<PortfolioReviewResult> => {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/review', {
+      params: {
+        available_cash: params?.availableCash ?? 0,
+        min_score: params?.minScore ?? 70,
+      },
+    });
+    return toCamelCase<PortfolioReviewResult>(response.data);
   },
 };

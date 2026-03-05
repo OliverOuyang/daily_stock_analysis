@@ -27,6 +27,17 @@
   - `./venv/bin/pytest -q tests/test_market_discover_api.py tests/test_stocks_resolve_api.py` 通过。
   - `apps/dsa-web npm run build` 通过。
 
+## 2026-03-05 点位一致性 + 资产分析首页化
+- 后端：
+  - `ReportStrategy` 新增 `ideal_buy_value/secondary_buy_value/stop_loss_value/take_profit_value`
+  - 新增 `GET /api/v1/portfolio/review`
+- 前端：
+  - 配置框点位改为“我的目标 + AI建议(可同步)”双轨
+  - 资产诊断按钮改为首页直接拉取诊断，保留“深聊”跳转
+- 测试：
+  - `./venv/bin/pytest -q tests/test_portfolio_review_api.py tests/test_stocks_resolve_api.py tests/test_market_discover_api.py` 通过。
+  - `apps/dsa-web npm run build` 通过。
+
 ## Debug 模板
 - 问题：
 - 复现步骤：
