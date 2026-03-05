@@ -402,14 +402,22 @@ class TestBuiltinToolDefinitions(unittest.TestCase):
             self.assertIsInstance(td, ToolDefinition)
             self.assertEqual(td.category, "market")
 
+    def test_import_macro_tools(self):
+        from src.agent.tools.macro_tools import ALL_MACRO_TOOLS
+        self.assertGreater(len(ALL_MACRO_TOOLS), 0, "ALL_MACRO_TOOLS must not be empty")
+        for td in ALL_MACRO_TOOLS:
+            self.assertIsInstance(td, ToolDefinition)
+            self.assertEqual(td.category, "data")
+
     def test_all_tools_have_valid_schemas(self):
         """All tools should generate valid OpenAI-format schemas (used by litellm)."""
         from src.agent.tools.data_tools import ALL_DATA_TOOLS
         from src.agent.tools.analysis_tools import ALL_ANALYSIS_TOOLS
         from src.agent.tools.search_tools import ALL_SEARCH_TOOLS
         from src.agent.tools.market_tools import ALL_MARKET_TOOLS
+        from src.agent.tools.macro_tools import ALL_MACRO_TOOLS
 
-        all_tools = ALL_DATA_TOOLS + ALL_ANALYSIS_TOOLS + ALL_SEARCH_TOOLS + ALL_MARKET_TOOLS
+        all_tools = ALL_DATA_TOOLS + ALL_ANALYSIS_TOOLS + ALL_SEARCH_TOOLS + ALL_MARKET_TOOLS + ALL_MACRO_TOOLS
         for td in all_tools:
             oai = td.to_openai_tool()
             self.assertEqual(oai["type"], "function")
