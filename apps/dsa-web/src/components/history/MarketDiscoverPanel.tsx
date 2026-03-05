@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import type { MarketDiscoverResponse, SectorDiscoverItem } from '../../types/market';
 import { marketApi } from '../../api/market';
 import { portfolioApi } from '../../api/portfolio';
+import { useDebounce } from '../../hooks';
 
 interface MarketDiscoverPanelProps {
   onSelectStock: (code: string) => void;
@@ -24,8 +25,13 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
   const [toast, setToast] = useState<string | null>(null);
   const [isPrescoreRunning, setIsPrescoreRunning] = useState(false);
   const [prescoreProgress, setPrescoreProgress] = useState('');
+
+  const debouncedMinScore = useDebounce(minScore, 500);
+  const debouncedSectorKeyword = useDebounce(sectorKeyword, 500);
+  const debouncedMinChangePct = useDebounce(minChangePct, 500);
+
   const parsedMinChangePct = (() => {
-    const n = Number(minChangePct);
+    const n = Number(debouncedMinChangePct);
     return Number.isFinite(n) ? n : undefined;
   })();
 
@@ -35,9 +41,9 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
     try {
       const res = await marketApi.discover({
         triggerAnalysis: false,
-        minScore,
-        sectorKeyword: sectorKeyword.trim() || undefined,
-        minChangePct: minChangePct.trim() === '' ? undefined : parsedMinChangePct,
+        minScore: debouncedMinScore,
+        sectorKeyword: debouncedSectorKeyword.trim() || undefined,
+        minChangePct: debouncedMinChangePct.trim() === '' ? undefined : parsedMinChangePct,
       });
       setData(res);
     } catch (err) {
@@ -52,7 +58,7 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
     // eslint-disable-next-line @typescript-eslint/no-floating-promises
     fetchDiscovery();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minScore, sectorKeyword, minChangePct]);
+  }, [debouncedMinScore, debouncedSectorKeyword, debouncedMinChangePct]);
 
   const addToWatchlist = async (code: string, name?: string) => {
     try {

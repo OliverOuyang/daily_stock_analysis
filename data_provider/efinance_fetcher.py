@@ -120,6 +120,13 @@ _etf_realtime_cache: Dict[str, Any] = {
     'ttl': 600  # 10分钟缓存有效期
 }
 
+# 股票基本信息缓存
+_base_info_cache: Dict[str, Any] = {}
+# 股票所属板块缓存
+_belong_board_cache: Dict[str, Any] = {}
+# 缓存有效期（1小时，基本信息变动频率低）
+_FUNDAMENTAL_CACHE_TTL = 3600
+
 
 def _is_etf_code(stock_code: str) -> bool:
     """
@@ -841,6 +848,14 @@ class EfinanceFetcher(BaseFetcher):
         """
         import efinance as ef
         
+        # 检查缓存
+        now = time.time()
+        if stock_code in _base_info_cache:
+            entry = _base_info_cache[stock_code]
+            if now - entry['timestamp'] < _FUNDAMENTAL_CACHE_TTL:
+                logger.debug(f"[缓存命中] {stock_code} 基本信息")
+                return entry['data']
+        
         try:
             # 防封禁策略
             self._set_random_user_agent()
@@ -859,19 +874,92 @@ class EfinanceFetcher(BaseFetcher):
                 logger.warning(f"[API返回] 未获取到 {stock_code} 的基本信息")
                 return None
             
+            data = None
             # 转换为字典
             if isinstance(info, pd.Series):
-                return info.to_dict()
+                data = info.to_dict()
             elif isinstance(info, pd.DataFrame):
                 if not info.empty:
-                    return info.iloc[0].to_dict()
+                    data = info.iloc[0].to_dict()
             
-            return None
+            if data:
+                _base_info_cache[stock_code] = {
+                    'data': data,
+                    'timestamp': now
+                }
+            return data
             
         except Exception as e:
             logger.error(f"[API错误] 获取 {stock_code} 基本信息失败: {e}")
             return None
-    
+
+    def get_batch_base_info(self, stock_codes: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        批量获取股票基本信息
+        
+        Args:
+            stock_codes: 股票代码列表
+            
+        Returns:
+            {股票代码: 基本信息字典}
+        """
+        if not stock_codes:
+            return {}
+
+        import efinance as ef
+        results = {}
+        missing_codes = []
+        now = time.time()
+
+        # 1. 检查缓存
+        for code in stock_codes:
+            if code in _base_info_cache:
+                entry = _base_info_cache[code]
+                if now - entry['timestamp'] < _FUNDAMENTAL_CACHE_TTL:
+                    results[code] = entry['data']
+                    continue
+            missing_codes.append(code)
+
+        if not missing_codes:
+            return results
+
+        try:
+            # 2. 批量请求
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info(f"[API调用] ef.stock.get_base_info(stock_codes={missing_codes}) 批量获取...")
+            import time as _time
+            api_start = _time.time()
+            
+            df = ef.stock.get_base_info(missing_codes)
+            
+            api_elapsed = _time.time() - api_start
+            logger.info(f"[API返回] ef.stock.get_base_info 成功, 返回 {len(df) if df is not None else 0} 条, 耗时 {api_elapsed:.2f}s")
+
+            if df is not None and not df.empty:
+                # efinance 返回的列名可能是 '股票代码' 或 'code'
+                code_col = '股票代码' if '股票代码' in df.columns else 'code'
+                for _, row in df.iterrows():
+                    data = row.to_dict()
+                    code = str(data.get(code_col, '')).strip()
+                    if code:
+                        results[code] = data
+                        _base_info_cache[code] = {
+                            'data': data,
+                            'timestamp': now
+                        }
+
+        except Exception as e:
+            logger.error(f"[API错误] 批量获取基本信息失败: {e}")
+            # 失败后退化到逐个获取（利用单体的缓存和流控）
+            for code in missing_codes:
+                info = self.get_base_info(code)
+                if info:
+                    results[code] = info
+
+        return results
+
     def get_belong_board(self, stock_code: str) -> Optional[pd.DataFrame]:
         """
         获取股票所属板块
@@ -885,6 +973,14 @@ class EfinanceFetcher(BaseFetcher):
             所属板块 DataFrame，获取失败返回 None
         """
         import efinance as ef
+
+        # 检查缓存
+        now = time.time()
+        if stock_code in _belong_board_cache:
+            entry = _belong_board_cache[stock_code]
+            if now - entry['timestamp'] < _FUNDAMENTAL_CACHE_TTL:
+                logger.debug(f"[缓存命中] {stock_code} 所属板块")
+                return entry['data']
         
         try:
             # 防封禁策略
@@ -901,6 +997,10 @@ class EfinanceFetcher(BaseFetcher):
             
             if df is not None and not df.empty:
                 logger.info(f"[API返回] ef.stock.get_belong_board 成功: 返回 {len(df)} 个板块, 耗时 {api_elapsed:.2f}s")
+                _belong_board_cache[stock_code] = {
+                    'data': df,
+                    'timestamp': now
+                }
                 return df
             else:
                 logger.warning(f"[API返回] 未获取到 {stock_code} 的板块信息")

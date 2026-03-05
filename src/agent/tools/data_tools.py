@@ -370,6 +370,14 @@ def _handle_portfolio_review(available_cash: float = 0.0, min_score: int = 70) -
     codes = [str(p.get("stock_code") or "").upper() for p in profiles if p.get("stock_code")]
     latest_scores = db.get_latest_sentiment_scores(codes, days=30)
 
+    # Pre-fetch industry info in batch to avoid repeated network calls and sleeps
+    try:
+        from data_provider.efinance_fetcher import EfinanceFetcher
+        batch_info = EfinanceFetcher().get_batch_base_info(codes)
+    except Exception as e:
+        logger.warning(f"portfolio_review 批量获取基本信息失败: {e}")
+        batch_info = {}
+
     # Build industry concentration map
     industry_weights: Dict[str, float] = {}
     holding_rows: List[Dict[str, Any]] = []
@@ -381,14 +389,18 @@ def _handle_portfolio_review(available_cash: float = 0.0, min_score: int = 70) -
         total_position_pct += position_pct
 
         industry = "未知行业"
-        try:
-            info = _handle_get_stock_info(code)
-            for k in ("行业", "所属行业", "industry", "行业板块"):
-                if info.get(k):
-                    industry = str(info.get(k))
-                    break
-        except Exception:
-            pass
+        info = batch_info.get(code, {})
+        if not info:
+            # Fallback for single stock info if batch missed it
+            try:
+                info = _handle_get_stock_info(code)
+            except Exception:
+                info = {}
+
+        for k in ("行业", "所属行业", "industry", "行业板块"):
+            if info.get(k):
+                industry = str(info.get(k))
+                break
 
         industry_weights[industry] = industry_weights.get(industry, 0.0) + position_pct
         score_info = latest_scores.get(code, {})
