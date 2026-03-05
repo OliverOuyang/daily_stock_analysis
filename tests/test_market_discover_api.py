@@ -320,6 +320,54 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         data = resp.json()
         self.assertEqual(data["status"], "completed")
 
+    @patch("api.v1.endpoints.market.get_db")
+    @patch("api.v1.endpoints.market.run_market_discover_scan")
+    @patch("api.v1.endpoints.market._task_is_done")
+    def test_market_prescore_status_uses_batch_history_lookup(self, mock_task_done, mock_scan, mock_get_db) -> None:
+        mock_scan.return_value = MarketDiscoverResponse(
+            source="akshare",
+            total_sectors=1,
+            triggered_tasks=0,
+            duplicate_tasks=0,
+            sectors=[
+                SectorDiscoverItem(
+                    sector_name="有色金属",
+                    change_pct=2.3,
+                    leaders=[MarketLeader(stock_code="000933", stock_name="神火股份", change_pct=5.1, latest_score=82)],
+                )
+            ],
+            cache_hit=False,
+            cache_age_seconds=None,
+            cache_ttl_seconds=1200,
+        )
+        fake_db = MagicMock()
+        fake_db.get_existing_query_ids.return_value = {"task_1"}
+        mock_get_db.return_value = fake_db
+        # task_1 should be skipped by history batch hit; task_2 checked via _task_is_done
+        mock_task_done.return_value = (True, False)
+
+        run_id = "run_batch_lookup_1"
+        market_endpoint._PRESCORE_RUNS[run_id] = {
+            "ts": time.time(),
+            "started_at": time.time() - 2,
+            "status": "running",
+            "task_ids": ["task_1", "task_2"],
+            "total_tasks": 2,
+            "completed_tasks": 0,
+            "failed_tasks": 0,
+            "diagnostics": None,
+            "params": {"top_n": 5, "leaders_per_sector": 3, "min_score": 70, "sector_keyword": None, "min_change_pct": None},
+            "result": None,
+        }
+
+        resp = self.client.get(f"/api/v1/market/discover/prescore/{run_id}")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], "completed")
+        self.assertEqual(data["progress"], 100)
+        fake_db.get_existing_query_ids.assert_called_once_with(["task_1", "task_2"], days=30)
+        mock_task_done.assert_called_once_with("task_2")
+
     @patch("api.v1.endpoints.market.run_market_discover_scan")
     @patch("api.v1.endpoints.market._task_is_done", return_value=(False, False))
     def test_market_prescore_status_timeout_returns_degraded_result(self, _mock_done, mock_scan) -> None:

@@ -18,7 +18,7 @@ import json
 import logging
 import re
 from datetime import datetime, date, timedelta
-from typing import Optional, List, Dict, Any, TYPE_CHECKING, Tuple
+from typing import Optional, List, Dict, Any, TYPE_CHECKING, Tuple, Set
 
 import pandas as pd
 from sqlalchemy import (
@@ -974,6 +974,31 @@ class DatabaseManager:
                     "created_at": r.created_at.isoformat() if r.created_at else None,
                 }
             return result
+
+    def get_existing_query_ids(
+        self,
+        query_ids: List[str],
+        days: int = 30,
+    ) -> Set[str]:
+        """
+        批量查询 analysis_history 中已存在的 query_id 集合。
+        """
+        ids = [str(x).strip() for x in query_ids if x and str(x).strip()]
+        if not ids:
+            return set()
+
+        cutoff_date = datetime.now() - timedelta(days=days)
+        with self.get_session() as session:
+            rows = session.execute(
+                select(AnalysisHistory.query_id)
+                .where(
+                    and_(
+                        AnalysisHistory.query_id.in_(ids),
+                        AnalysisHistory.created_at >= cutoff_date,
+                    )
+                )
+            ).all()
+            return {str(r[0]) for r in rows if r and r[0]}
     
     def get_analysis_history_paginated(
         self,

@@ -221,13 +221,21 @@ def _task_is_done(task_id: str) -> Tuple[bool, bool]:
             return True, False
         return False, False
 
-    try:
-        records = get_db().get_analysis_history(query_id=task_id, limit=1)
-        if records:
-            return True, False
-    except Exception:
-        pass
     return False, False
+
+
+def _get_completed_task_ids_from_history(task_ids: List[str]) -> set[str]:
+    """
+    批量查询已落库的 analysis query_id，减少 prescore 轮询时的 DB 往返次数。
+    """
+    ids = [str(x).strip() for x in task_ids if x and str(x).strip()]
+    if not ids:
+        return set()
+    try:
+        return get_db().get_existing_query_ids(ids, days=30)
+    except Exception as e:
+        logger.debug("批量查询历史任务完成态失败: %s", e)
+        return set()
 
 
 def _discover_hot_sectors(top_n: int, leaders_per_sector: int) -> Tuple[str, List[Dict[str, Any]]]:
@@ -677,9 +685,14 @@ def get_market_prescore_status(run_id: str) -> MarketPrescoreStatusResponse:
     started_at = float(run.get("started_at") or run.get("ts") or time.time())
 
     if status in ("running", "pending"):
+        task_ids = [str(tid) for tid in run.get("task_ids", [])]
+        completed_in_history = _get_completed_task_ids_from_history(task_ids)
         done = 0
         failed = 0
-        for tid in run.get("task_ids", []):
+        for tid in task_ids:
+            if tid in completed_in_history:
+                done += 1
+                continue
             is_done, is_failed = _task_is_done(str(tid))
             if is_done:
                 done += 1

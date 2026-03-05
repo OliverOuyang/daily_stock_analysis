@@ -283,26 +283,38 @@ class StockService:
         批量获取股票实时行情 - 使用多线程并行加速
         """
         import concurrent.futures
-        
-        results = []
-        # 使用线程池并行获取行情，提高自选池刷新速度
+
+        if not stock_codes:
+            return []
+
+        # 先去重，避免重复请求同一标的；保持首次出现顺序，前端列表稳定不抖动
+        ordered_codes: List[str] = []
+        seen = set()
+        for code in stock_codes:
+            c = str(code).strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            ordered_codes.append(c)
+
+        results_map: Dict[str, Dict[str, Any]] = {}
         # 限制最大线程数为 10，避免触发 API 频控
-        max_workers = min(len(stock_codes), 10) if stock_codes else 1
-        
+        max_workers = min(len(ordered_codes), 10)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交所有任务
-            future_to_code = {executor.submit(self.get_realtime_quote, code): code for code in stock_codes}
-            
+            future_to_code = {executor.submit(self.get_realtime_quote, code): code for code in ordered_codes}
+
             for future in concurrent.futures.as_completed(future_to_code):
+                code = future_to_code[future]
                 try:
                     quote = future.result()
                     if quote:
-                        results.append(quote)
+                        results_map[code] = quote
                 except Exception as e:
-                    code = future_to_code[future]
                     logger.error(f"批量获取 {code} 行情异常: {e}")
-                    
-        return results
+
+        # 按输入顺序返回
+        return [results_map[c] for c in ordered_codes if c in results_map]
     
     def get_history_data(
         self,
