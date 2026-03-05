@@ -26,8 +26,8 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
     const clean = text.replace(/\s+/g, ' ');
     const reduceMatch = clean.match(/(?:减仓|卖出)[^。；\n]*?(\d+(?:\.\d+)?)\s*%?/);
     const addMatch = clean.match(/(?:补仓|加仓)[^。；\n]*?(\d+(?:\.\d+)?)\s*%?/);
-    const reduceText = reduceMatch ? `建议减仓/卖出比例: ${reduceMatch[1]}%` : '未提取到明确减仓比例';
-    const addText = addMatch ? `建议补仓/加仓比例: ${addMatch[1]}%` : '未提取到明确补仓比例';
+    const reduceText = reduceMatch ? `建议减仓/卖出比例: ${reduceMatch[1]}%` : '减仓比例: 暂无明确建议';
+    const addText = addMatch ? `建议补仓/加仓比例: ${addMatch[1]}%` : '补仓比例: 暂无明确建议';
     return { reduceText, addText };
   };
 
@@ -160,6 +160,15 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                     </p>
                     {structuredActions.basis && (
                       <p className="text-[11px] text-secondary">依据: {structuredActions.basis}</p>
+                    )}
+                    {structuredActions.extractionSource && (
+                      <p className="text-[11px] text-muted">
+                        来源: {structuredActions.extractionSource}
+                        {structuredActions.completeness ? ` · ${structuredActions.completeness}` : ''}
+                      </p>
+                    )}
+                    {structuredActions.isFallback && (
+                      <p className="text-[11px] text-warning">已应用默认仓位动作（减仓50% / 补仓20%）</p>
                     )}
                   </>
                 ) : (

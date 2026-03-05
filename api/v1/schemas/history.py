@@ -136,6 +136,12 @@ class ReportPositionActions(BaseModel):
     basis: Optional[str] = Field(None, description="动作依据")
     confidence: Optional[int] = Field(None, ge=0, le=100, description="建议置信度")
     missing_reason: Optional[str] = Field(None, description="缺失原因")
+    extraction_source: Optional[str] = Field(
+        None,
+        description="提取来源: structured_json/text_rule/default_fallback",
+    )
+    is_fallback: Optional[bool] = Field(None, description="是否使用了默认兜底")
+    completeness: Optional[str] = Field(None, description="完整性: complete/partial/defaulted")
 
 
 class ReportStrategy(BaseModel):

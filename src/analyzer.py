@@ -12,6 +12,7 @@ A股自选股智能分析系统 - AI分析层
 
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
@@ -769,7 +770,7 @@ class GeminiAnalyzer:
             logger.debug(f"=== {model_name} 完整响应 ({len(response_text)}字符) ===\n{response_text}\n=== End Response ===")
             
             # 解析响应
-            result = self._parse_response(response_text, code, name)
+            result = self._parse_response(response_text, code, name, context=context)
             result.raw_response = response_text
             result.search_performed = bool(news_context)
             result.market_snapshot = self._build_market_snapshot(context)
@@ -1128,7 +1129,8 @@ class GeminiAnalyzer:
         self, 
         response_text: str, 
         code: str, 
-        name: str
+        name: str,
+        context: Optional[Dict[str, Any]] = None,
     ) -> AnalysisResult:
         """
         解析 Gemini 响应（决策仪表盘版）
@@ -1158,7 +1160,7 @@ class GeminiAnalyzer:
                 
                 # 提取 dashboard 数据
                 dashboard = data.get('dashboard', None)
-                position_actions = self._extract_position_actions(data, dashboard)
+                position_actions = self._extract_position_actions(data, dashboard, context=context)
 
                 # 优先使用 AI 返回的股票名称（如果原名称无效或包含代码）
                 ai_stock_name = data.get('stock_name')
@@ -1227,8 +1229,6 @@ class GeminiAnalyzer:
     
     def _fix_json_string(self, json_str: str) -> str:
         """修复常见的 JSON 格式问题"""
-        import re
-        
         # 移除注释
         json_str = re.sub(r'//.*?\n', '\n', json_str)
         json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
@@ -1257,10 +1257,108 @@ class GeminiAnalyzer:
         m = re.search(r"-?\d+(?:\.\d+)?", s)
         return float(m.group()) if m else None
 
+    @staticmethod
+    def _normalize_ratio_pct(token: Any) -> Optional[float]:
+        """将比例表达统一为 0-100 百分比。支持 50%、五成、半仓、1/2。"""
+        if token is None:
+            return None
+        if isinstance(token, (int, float)):
+            val = float(token)
+            if 0 <= val <= 1:
+                return round(val * 100, 2)
+            if 0 <= val <= 100:
+                return round(val, 2)
+            return None
+
+        s = str(token).strip().replace("％", "%").replace(" ", "")
+        if not s:
+            return None
+        mapping = {"半仓": 50.0, "半成仓": 50.0, "全仓": 100.0, "满仓": 100.0}
+        if s in mapping:
+            return mapping[s]
+
+        zh_num = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+        m = re.search(r"([一二两三四五六七八九]|\d+(?:\.\d+)?)成", s)
+        if m:
+            raw = m.group(1)
+            if raw in zh_num:
+                return float(zh_num[raw] * 10)
+            return float(raw) * 10
+
+        m = re.search(r"(\d+(?:\.\d+)?)%", s)
+        if m:
+            return float(m.group(1))
+
+        m = re.search(r"(\d+)\s*/\s*(\d+)", s)
+        if m:
+            num = float(m.group(1))
+            den = float(m.group(2))
+            if den > 0:
+                return round(num / den * 100, 2)
+
+        m = re.search(r"-?\d+(?:\.\d+)?", s)
+        if not m:
+            return None
+        val = float(m.group())
+        if 0 <= val <= 1:
+            return round(val * 100, 2)
+        if 0 <= val <= 100:
+            return round(val, 2)
+        return None
+
+    def _extract_action_values_from_text(self, text: str, action_keywords: List[str]) -> Dict[str, Optional[float]]:
+        """从文本分句中抽取动作价格/比例。"""
+        if not text:
+            return {"price": None, "ratio_pct": None}
+
+        segments = [x.strip() for x in re.split(r"[。；;，,\n]", text) if x.strip()]
+        for seg in segments:
+            matched_keyword = next((k for k in action_keywords if k in seg), None)
+            if not matched_keyword:
+                continue
+
+            price = None
+            # 优先提取“动作词附近”的价格，避免一句话里多个动作串联时串位
+            pm = re.search(
+                rf"(?:{matched_keyword})[^。；;，,\n]{{0,12}}?(\d+(?:\.\d+)?)\s*元|(\d+(?:\.\d+)?)\s*元[^。；;，,\n]{{0,12}}?(?:{matched_keyword})",
+                seg,
+            )
+            if pm:
+                price = float(pm.group(1) or pm.group(2))
+            else:
+                pm = re.search(r"(\d+(?:\.\d+)?)\s*元", seg)
+                if pm:
+                    price = float(pm.group(1))
+
+            ratio = None
+            for pat, use_full_match in [
+                (r"(\d+(?:\.\d+)?)\s*%", False),
+                (r"([一二两三四五六七八九]|\d+(?:\.\d+)?)\s*成", True),
+                (r"(半仓|全仓|满仓)", False),
+                (r"(\d+\s*/\s*\d+)", False),
+            ]:
+                m = re.search(pat, seg)
+                if m:
+                    token = m.group(0) if use_full_match else m.group(1)
+                    ratio = self._normalize_ratio_pct(token)
+                    if ratio is not None:
+                        break
+
+            if ratio is None:
+                km = re.search(r"(减仓|卖出|补仓|加仓)[^。；;\n]{0,16}?(\d+(?:\.\d+)?)", seg)
+                if km:
+                    ratio = self._normalize_ratio_pct(km.group(2))
+
+            if price is not None or ratio is not None:
+                return {"price": price, "ratio_pct": ratio}
+
+        return {"price": None, "ratio_pct": None}
+
     def _extract_position_actions(
         self,
         data: Dict[str, Any],
         dashboard: Optional[Dict[str, Any]],
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         提取并标准化持仓动作建议结构。
@@ -1274,20 +1372,94 @@ class GeminiAnalyzer:
                 dashboard.get("battle_plan", {}).get("position_actions")
                 if isinstance(dashboard.get("battle_plan"), dict) else None
             )
-        if not isinstance(raw, dict):
-            return None
-
         parsed = {
-            "reduce_price": self._to_float_or_none(raw.get("reduce_price")),
-            "reduce_ratio_pct": self._to_float_or_none(raw.get("reduce_ratio_pct")),
-            "add_price": self._to_float_or_none(raw.get("add_price")),
-            "add_ratio_pct": self._to_float_or_none(raw.get("add_ratio_pct")),
-            "basis": str(raw.get("basis") or "").strip() or None,
-            "confidence": self._to_float_or_none(raw.get("confidence")),
-            "missing_reason": str(raw.get("missing_reason") or "").strip() or None,
+            "reduce_price": None,
+            "reduce_ratio_pct": None,
+            "add_price": None,
+            "add_ratio_pct": None,
+            "basis": None,
+            "confidence": None,
+            "missing_reason": None,
+            "extraction_source": None,
+            "is_fallback": False,
+            "completeness": "partial",
         }
+        if isinstance(raw, dict):
+            parsed.update({
+                "reduce_price": self._to_float_or_none(raw.get("reduce_price")),
+                "reduce_ratio_pct": self._normalize_ratio_pct(raw.get("reduce_ratio_pct")),
+                "add_price": self._to_float_or_none(raw.get("add_price")),
+                "add_ratio_pct": self._normalize_ratio_pct(raw.get("add_ratio_pct")),
+                "basis": str(raw.get("basis") or "").strip() or None,
+                "confidence": self._to_float_or_none(raw.get("confidence")),
+                "missing_reason": str(raw.get("missing_reason") or "").strip() or None,
+                "extraction_source": "structured_json",
+            })
+
+        text_blob = "\n".join(
+            str(x or "").strip()
+            for x in [
+                data.get("operation_advice"),
+                data.get("analysis_summary"),
+                data.get("buy_reason"),
+                str(raw.get("basis")) if isinstance(raw, dict) else "",
+            ]
+            if str(x or "").strip()
+        )
+        if text_blob:
+            reduce_text = self._extract_action_values_from_text(text_blob, ["减仓", "卖出"])
+            add_text = self._extract_action_values_from_text(text_blob, ["补仓", "加仓"])
+            if parsed["reduce_price"] is None and reduce_text["price"] is not None:
+                parsed["reduce_price"] = reduce_text["price"]
+            if parsed["reduce_ratio_pct"] is None and reduce_text["ratio_pct"] is not None:
+                parsed["reduce_ratio_pct"] = reduce_text["ratio_pct"]
+            if parsed["add_price"] is None and add_text["price"] is not None:
+                parsed["add_price"] = add_text["price"]
+            if parsed["add_ratio_pct"] is None and add_text["ratio_pct"] is not None:
+                parsed["add_ratio_pct"] = add_text["ratio_pct"]
+            if parsed["extraction_source"] is None and (
+                reduce_text["price"] is not None or reduce_text["ratio_pct"] is not None
+                or add_text["price"] is not None or add_text["ratio_pct"] is not None
+            ):
+                parsed["extraction_source"] = "text_rule"
+
+        is_holding = False
+        if isinstance(context, dict):
+            profile = context.get("trader_profile")
+            if isinstance(profile, dict) and str(profile.get("status") or "").strip().lower() == "holding":
+                is_holding = True
+
+        if is_holding:
+            default_applied = False
+            if parsed["reduce_ratio_pct"] is None:
+                parsed["reduce_ratio_pct"] = 50.0
+                default_applied = True
+            if parsed["add_ratio_pct"] is None:
+                parsed["add_ratio_pct"] = 20.0
+                default_applied = True
+            if default_applied:
+                parsed["is_fallback"] = True
+                parsed["missing_reason"] = parsed["missing_reason"] or "fallback_default_applied"
+                parsed["basis"] = parsed["basis"] or "持仓场景保守默认仓位动作"
+                if parsed["extraction_source"] is None:
+                    parsed["extraction_source"] = "default_fallback"
+
         if parsed["confidence"] is not None:
             parsed["confidence"] = int(max(0, min(100, round(float(parsed["confidence"])))))
+        if parsed["reduce_ratio_pct"] is not None and parsed["add_ratio_pct"] is not None:
+            parsed["completeness"] = "defaulted" if parsed["is_fallback"] else "complete"
+        else:
+            parsed["completeness"] = "partial"
+
+        if (
+            not is_holding
+            and parsed["reduce_price"] is None
+            and parsed["reduce_ratio_pct"] is None
+            and parsed["add_price"] is None
+            and parsed["add_ratio_pct"] is None
+        ):
+            return None
+
         return parsed
 
     def _parse_text_response(
