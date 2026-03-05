@@ -19,6 +19,8 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from api.v1.schemas.stocks import (
     ExtractFromImageResponse,
     KLineData,
+    StockResolveItem,
+    StockResolveResponse,
     StockHistoryResponse,
     StockQuote,
     StockQuotesResponse,
@@ -138,6 +140,35 @@ def get_stock_quotes(
         raise HTTPException(
             status_code=500,
             detail={"error": "internal_error", "message": f"批量获取行情失败: {str(e)}"}
+        )
+
+
+@router.get(
+    "/resolve",
+    response_model=StockResolveResponse,
+    summary="按股票名称/代码解析候选",
+)
+def resolve_stock_query(
+    q: str = Query(..., description="查询词（名称/代码）"),
+    limit: int = Query(5, ge=1, le=20, description="候选上限"),
+) -> StockResolveResponse:
+    query = (q or "").strip()
+    if not query:
+        return StockResolveResponse(query="", total=0, items=[])
+
+    try:
+        service = StockService()
+        items = service.resolve_stock_query(query=query, limit=limit)
+        return StockResolveResponse(
+            query=query,
+            total=len(items),
+            items=[StockResolveItem(**x) for x in items],
+        )
+    except Exception as e:
+        logger.error("股票名称解析失败: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "internal_error", "message": "股票名称解析失败"},
         )
 
 

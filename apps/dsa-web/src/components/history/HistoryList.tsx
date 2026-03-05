@@ -11,6 +11,7 @@ interface HistoryListProps {
   hasMore: boolean;
   selectedId?: number;  // Selected history record ID
   onItemClick: (recordId: number) => void;  // Callback with record ID
+  onAddToWatchlist?: (code: string, name?: string) => void;
   onLoadMore: () => void;
   className?: string;
 }
@@ -26,6 +27,7 @@ export const HistoryList: React.FC<HistoryListProps> = ({
   hasMore,
   selectedId,
   onItemClick,
+  onAddToWatchlist,
   onLoadMore,
   className = '',
 }) => {
@@ -87,53 +89,64 @@ export const HistoryList: React.FC<HistoryListProps> = ({
         ) : (
           <div className="space-y-1.5">
             {items.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onItemClick(item.id)}
-                className={`history-item w-full text-left ${selectedId === item.id ? 'active' : ''
-                  }`}
-              >
-                <div className="flex items-center gap-2 w-full">
-                  {/* 情感分数指示条 */}
-                  {item.sentimentScore !== undefined && (
-                    <span
-                      className="w-0.5 h-8 rounded-full flex-shrink-0"
-                      style={{
-                        backgroundColor: getSentimentColor(item.sentimentScore),
-                        boxShadow: `0 0 6px ${getSentimentColor(item.sentimentScore)}40`
-                      }}
-                    />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="font-medium text-white truncate text-xs">
-                        {item.stockName || item.stockCode}
-                      </span>
-                      {item.sentimentScore !== undefined && (
-                        <span
-                          className="text-xs font-mono font-semibold px-1 py-0.5 rounded"
-                          style={{
-                            color: getSentimentColor(item.sentimentScore),
-                            backgroundColor: `${getSentimentColor(item.sentimentScore)}15`
-                          }}
-                        >
-                          {item.sentimentScore}
+              <div key={item.id} className={`history-item w-full text-left ${selectedId === item.id ? 'active' : ''}`}>
+                <button
+                  type="button"
+                  onClick={() => onItemClick(item.id)}
+                  className="w-full text-left"
+                >
+                  <div className="flex items-center gap-2 w-full">
+                    {/* 情感分数指示条 */}
+                    {item.sentimentScore !== undefined && (
+                      <span
+                        className="w-0.5 h-8 rounded-full flex-shrink-0"
+                        style={{
+                          backgroundColor: getSentimentColor(item.sentimentScore),
+                          boxShadow: `0 0 6px ${getSentimentColor(item.sentimentScore)}40`
+                        }}
+                      />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="font-medium text-white truncate text-xs">
+                          {item.stockName || item.stockCode}
                         </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <span className="text-xs text-muted font-mono">
-                        {item.stockCode}
-                      </span>
-                      <span className="text-xs text-muted/50">·</span>
-                      <span className="text-xs text-muted">
-                        {formatDateTime(item.createdAt)}
-                      </span>
+                        {item.sentimentScore !== undefined && (
+                          <span
+                            className="text-xs font-mono font-semibold px-1 py-0.5 rounded"
+                            style={{
+                              color: getSentimentColor(item.sentimentScore),
+                              backgroundColor: `${getSentimentColor(item.sentimentScore)}15`
+                            }}
+                          >
+                            {item.sentimentScore}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-xs text-muted font-mono">
+                          {item.stockCode}
+                        </span>
+                        <span className="text-xs text-muted/50">·</span>
+                        <span className="text-xs text-muted">
+                          {formatDateTime(item.createdAt)}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </button>
+                </button>
+                {onAddToWatchlist && (
+                  <div className="mt-1.5 flex justify-end">
+                    <button
+                      type="button"
+                      className="text-[10px] px-2 py-0.5 rounded border border-amber-500/30 text-amber-300 hover:bg-amber-500/10"
+                      onClick={() => onAddToWatchlist(item.stockCode, item.stockName)}
+                    >
+                      加入自选
+                    </button>
+                  </div>
+                )}
+              </div>
             ))}
 
             {/* 加载更多触发器 */}

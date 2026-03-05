@@ -105,3 +105,18 @@ class StockHistoryResponse(BaseModel):
 class StockQuotesResponse(BaseModel):
     """批量股票行情响应"""
     items: List[StockQuote]
+
+
+class StockResolveItem(BaseModel):
+    """股票名称/代码解析候选项"""
+    stock_code: str = Field(..., description="股票代码")
+    stock_name: Optional[str] = Field(None, description="股票名称")
+    market: Optional[str] = Field(None, description="市场标识: CN/HK/US")
+    score: Optional[int] = Field(None, description="匹配分数(0-100)")
+
+
+class StockResolveResponse(BaseModel):
+    """股票名称/代码解析响应"""
+    query: str = Field(..., description="查询词")
+    total: int = Field(..., description="候选数量")
+    items: List[StockResolveItem] = Field(default_factory=list, description="候选列表")

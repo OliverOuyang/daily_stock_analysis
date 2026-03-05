@@ -142,6 +142,10 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
             {items.map((item) => {
               const quote = quotes[item.stockCode];
               const isOpportunity = checkBuyOpportunity(item.stockCode);
+              const displayName =
+                (item.stockName && item.stockName !== item.stockCode ? item.stockName : undefined)
+                || (quote?.stockName && quote.stockName !== item.stockCode ? quote.stockName : undefined)
+                || item.stockCode;
               return (
                 <div
                   key={item.id}
@@ -166,7 +170,7 @@ export const WatchlistPanel: React.FC<WatchlistPanelProps> = ({
                           className="text-left min-w-0"
                           title="填入输入框"
                         >
-                          <p className="text-xs text-white truncate font-medium">{item.stockName || item.stockCode}</p>
+                          <p className="text-xs text-white truncate font-medium">{displayName}</p>
                           <p className="text-[10px] text-muted font-mono">{item.stockCode}</p>
                         </button>
                         <div className="flex flex-col items-end gap-1">

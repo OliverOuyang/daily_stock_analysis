@@ -6,8 +6,9 @@ import type { PortfolioProfile, PortfolioStatus } from '../types/portfolio';
 import { historyApi } from '../api/history';
 import { analysisApi } from '../api/analysis';
 import { portfolioApi } from '../api/portfolio';
-import { stocksApi, type StockQuote } from '../api/stocks';
+import { stocksApi, type StockQuote, type StockResolveItem } from '../api/stocks';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
+import { validateStockCode } from '../utils/validation';
 import { useAnalysisStore } from '../stores/analysisStore';
 import { ReportSummary } from '../components/report';
 import { HistoryList, WatchlistPanel, MarketDiscoverPanel } from '../components/history';
@@ -65,6 +66,9 @@ const HomePage: React.FC = () => {
     targetSell?: string;
     stopLoss?: string;
   }>({});
+  const [nameResolveToken, setNameResolveToken] = useState('');
+  const [nameResolveOptions, setNameResolveOptions] = useState<StockResolveItem[]>([]);
+  const [pendingResolvedCodes, setPendingResolvedCodes] = useState<string[]>([]);
 
   const analysisRequestIdRef = useRef<number>(0);
 
@@ -237,19 +241,87 @@ const HomePage: React.FC = () => {
   };
 
   const handleAnalyze = async () => {
-    const parsed = parseStockCodesInput(stockCode);
-    if (parsed.message) { setInputError(parsed.message); return; }
-    setInputError(undefined); setIsAnalyzing(true); setLoading(true);
+    const resolveResult = await resolveInputToCodes(stockCode);
+    if (resolveResult.error) {
+      setInputError(resolveResult.error);
+      return;
+    }
+    if (resolveResult.needSelect) {
+      setNameResolveToken(resolveResult.needSelect.token);
+      setNameResolveOptions(resolveResult.needSelect.options);
+      setPendingResolvedCodes(resolveResult.needSelect.resolvedCodes);
+      setInputError(`"${resolveResult.needSelect.token}" 匹配到多个股票，请先选择`);
+      return;
+    }
+    if (!resolveResult.codes || resolveResult.codes.length === 0) {
+      setInputError('请输入至少一个股票代码或股票名称');
+      return;
+    }
+    await runAnalyzeCodes(resolveResult.codes);
+    setStockCode('');
+  };
+
+  const runAnalyzeCodes = useCallback(async (codes: string[]) => {
+    if (codes.length === 0) return;
+    setInputError(undefined);
+    setNameResolveToken('');
+    setNameResolveOptions([]);
+    setPendingResolvedCodes([]);
+    setIsAnalyzing(true);
+    setLoading(true);
     try {
       const size = clampBatchSize(batchSize);
       const delayMs = clampBatchDelayMs(batchDelayMs);
-      for (let i = 0; i < parsed.codes.length; i += size) {
-        const chunk = parsed.codes.slice(i, i + size);
+      for (let i = 0; i < codes.length; i += size) {
+        const chunk = codes.slice(i, i + size);
         await Promise.allSettled(chunk.map((code) => analysisApi.analyzeAsync({ stockCode: code, reportType: 'detailed' })));
-        if (i + size < parsed.codes.length) await new Promise((r) => setTimeout(r, delayMs));
+        if (i + size < codes.length) await new Promise((r) => setTimeout(r, delayMs));
       }
-      setStockCode('');
     } catch (err) { setStoreError('分析失败'); } finally { setIsAnalyzing(false); setLoading(false); }
+  }, [batchDelayMs, batchSize, setLoading, setStoreError]);
+
+  const resolveInputToCodes = useCallback(async (rawInput: string): Promise<{
+    codes?: string[];
+    error?: string;
+    needSelect?: { token: string; options: StockResolveItem[]; resolvedCodes: string[] };
+  }> => {
+    const tokens = rawInput
+      .split(/[,\s，;；]+/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return { error: '请输入至少一个股票代码或股票名称' };
+
+    const resolvedCodes: string[] = [];
+    for (const token of tokens) {
+      const valid = validateStockCode(token);
+      if (valid.valid) {
+        if (!resolvedCodes.includes(valid.normalized)) resolvedCodes.push(valid.normalized);
+        continue;
+      }
+
+      const response = await stocksApi.resolve(token, 5);
+      if (response.total <= 0) {
+        return { error: `无法识别 "${token}"，请改用股票代码或更完整名称` };
+      }
+      if (response.total > 1) {
+        return {
+          needSelect: {
+            token,
+            options: response.items,
+            resolvedCodes,
+          },
+        };
+      }
+      const only = response.items[0];
+      if (!resolvedCodes.includes(only.stockCode)) resolvedCodes.push(only.stockCode);
+    }
+    return { codes: resolvedCodes };
+  }, []);
+
+  const handleSelectResolvedCandidate = async (selectedCode: string) => {
+    const merged = [...pendingResolvedCodes, selectedCode].filter((v, idx, arr) => arr.indexOf(v) === idx);
+    setStockCode(merged.join(','));
+    await runAnalyzeCodes(merged);
   };
 
   const handleSaveTradeProfile = async () => {
@@ -283,20 +355,7 @@ const HomePage: React.FC = () => {
     const targetCodes = Array.isArray(codes) ? codes : [codes];
     if (targetCodes.length === 0) return;
     setStockCode(targetCodes.join(','));
-    void (async () => {
-      setIsAnalyzing(true);
-      setLoading(true);
-      try {
-        await Promise.allSettled(
-          targetCodes.map((code) => analysisApi.analyzeAsync({ stockCode: code, reportType: 'detailed' })),
-        );
-      } catch (err) {
-        setStoreError('分析失败');
-      } finally {
-        setIsAnalyzing(false);
-        setLoading(false);
-      }
-    })();
+    void runAnalyzeCodes(targetCodes);
   };
 
   const handleAnalyzePortfolio = async () => {
@@ -314,16 +373,48 @@ const HomePage: React.FC = () => {
   };
 
   const filteredProfiles = profiles.filter((item) => profileFilter === 'favorite' ? item.isFavorite : profileFilter === 'all' ? true : item.status === profileFilter);
+  const sortedProfiles = [...filteredProfiles].sort((a, b) => {
+    const rank = (s: PortfolioStatus) => (s === 'holding' ? 0 : 1);
+    const rankDiff = rank(a.status) - rank(b.status);
+    if (rankDiff !== 0) return rankDiff;
+    const timeA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const timeB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    return timeB - timeA;
+  });
   const singleSaveCode = !parseStockCodesInput(stockCode).message && parseStockCodesInput(stockCode).codes.length === 1 ? parseStockCodesInput(stockCode).codes[0] : '';
+
+  const handleAddHistoryToWatchlist = async (code: string, name?: string) => {
+    const existing = profiles.find((p) => p.stockCode === code);
+    try {
+      await portfolioApi.upsert({
+        stockCode: code,
+        stockName: name,
+        status: existing?.status || 'watch',
+        isFavorite: true,
+        buyPrice: existing?.buyPrice,
+        positionPct: existing?.positionPct,
+        shares: existing?.shares,
+        totalInvestment: existing?.totalInvestment,
+        targetBuyPrice: existing?.targetBuyPrice,
+        targetSellPrice: existing?.targetSellPrice,
+        stopLossPrice: existing?.stopLossPrice,
+        actionHistory: existing?.actionHistory,
+        notes: existing?.notes,
+      });
+      await fetchPortfolioProfiles();
+    } catch (err) {
+      setStoreError('加入自选失败');
+    }
+  };
 
   useEffect(() => { if (singleSaveCode) fillTradeFormFromProfile(profiles.find((p) => p.stockCode === singleSaveCode)); }, [fillTradeFormFromProfile, profiles, singleSaveCode]);
 
   const sidebarItems = (
     <div className="flex flex-col gap-3">
-      <WatchlistPanel items={filteredProfiles} isLoading={isLoadingProfiles} quotes={watchlistQuotes} historicalTargets={historicalTargets} filter={profileFilter} onFilterChange={setProfileFilter} onUseCode={handleSelectFromWatchlist} onAnalyze={handleAnalyzeFromWatchlist} onDelete={(c) => portfolioApi.remove(c).then(fetchPortfolioProfiles)} />
+      <WatchlistPanel items={sortedProfiles} isLoading={isLoadingProfiles} quotes={watchlistQuotes} historicalTargets={historicalTargets} filter={profileFilter} onFilterChange={setProfileFilter} onUseCode={handleSelectFromWatchlist} onAnalyze={handleAnalyzeFromWatchlist} onDelete={(c) => portfolioApi.remove(c).then(fetchPortfolioProfiles)} />
       <MarketDiscoverPanel onSelectStock={handleSelectFromWatchlist} onAnalyze={(code) => handleAnalyzeFromWatchlist(code)} onFavoriteAdded={fetchPortfolioProfiles} />
       <TaskPanel tasks={activeTasks} />
-      <HistoryList items={historyItems} isLoading={isLoadingHistory} isLoadingMore={isLoadingMore} hasMore={hasMore} selectedId={selectedReport?.meta.id} onItemClick={handleHistoryClick} onLoadMore={() => !isLoadingMore && hasMore && fetchHistory(false, false)} className="flex-1 min-h-[200px]" />
+      <HistoryList items={historyItems} isLoading={isLoadingHistory} isLoadingMore={isLoadingMore} hasMore={hasMore} selectedId={selectedReport?.meta.id} onItemClick={handleHistoryClick} onAddToWatchlist={handleAddHistoryToWatchlist} onLoadMore={() => !isLoadingMore && hasMore && fetchHistory(false, false)} className="flex-1 min-h-[200px]" />
     </div>
   );
 
@@ -336,6 +427,22 @@ const HomePage: React.FC = () => {
             <input type="text" value={stockCode} onChange={(e) => setStockCode(e.target.value.toUpperCase())} placeholder="输入代码，如: 600519" className="input-terminal py-1.5 px-3 flex-1 text-sm bg-white/5" />
             <button onClick={handleAnalyze} disabled={!stockCode || isAnalyzing} className="btn-primary h-9 px-6 text-sm shadow-cyan/20">{isAnalyzing ? '分析中...' : '执行分析'}</button>
           </div>
+          {nameResolveOptions.length > 0 && (
+            <div className="glass-card p-2 border border-amber-500/30 bg-amber-500/5">
+              <div className="text-[11px] text-amber-300 mb-1.5">“{nameResolveToken}” 匹配到多个股票，请选择后分析：</div>
+              <div className="flex flex-wrap gap-2">
+                {nameResolveOptions.map((opt) => (
+                  <button
+                    key={`${opt.stockCode}-${opt.stockName || ''}`}
+                    onClick={() => void handleSelectResolvedCandidate(opt.stockCode)}
+                    className="text-[11px] px-2 py-1 rounded border border-cyan/30 text-cyan hover:bg-cyan/15"
+                  >
+                    {(opt.stockName || opt.stockCode)} ({opt.stockCode})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="text-[10px] text-muted font-mono">build: e7559e1</div>
           {inputError && <p className="text-[11px] text-rose-400">{inputError}</p>}
 

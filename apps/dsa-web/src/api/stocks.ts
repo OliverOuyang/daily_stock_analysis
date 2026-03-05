@@ -25,6 +25,19 @@ export interface StockQuotesResponse {
   items: StockQuote[];
 }
 
+export interface StockResolveItem {
+  stockCode: string;
+  stockName?: string;
+  market?: string;
+  score?: number;
+}
+
+export interface StockResolveResponse {
+  query: string;
+  total: number;
+  items: StockResolveItem[];
+}
+
 export const stocksApi = {
   async extractFromImage(file: File): Promise<ExtractFromImageResponse> {
     const formData = new FormData();
@@ -53,5 +66,12 @@ export const stocksApi = {
       params: { codes: codes.join(',') },
     });
     return toCamelCase<StockQuotesResponse>(response.data);
+  },
+
+  async resolve(query: string, limit = 5): Promise<StockResolveResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/stocks/resolve', {
+      params: { q: query, limit },
+    });
+    return toCamelCase<StockResolveResponse>(response.data);
   },
 };

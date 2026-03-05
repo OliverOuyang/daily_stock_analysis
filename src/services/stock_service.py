@@ -10,6 +10,7 @@
 """
 
 import logging
+import re
 import threading
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
@@ -29,10 +30,165 @@ class StockService:
     _FAILOVER_THRESHOLD = 2
     _fallback_lock = threading.Lock()
     _consecutive_failures: Dict[str, int] = {}
+    _resolve_cache_lock = threading.Lock()
+    _resolve_name_index: Dict[str, str] = {}
+    _resolve_cached_at: Optional[datetime] = None
+    _RESOLVE_CACHE_TTL_SECONDS = 1800
 
     def __init__(self):
         """初始化股票数据服务"""
         self.repo = StockRepository()
+
+    @staticmethod
+    def _detect_market(stock_code: str) -> str:
+        code = (stock_code or "").upper()
+        if re.match(r"^\d{6}$", code) or re.match(r"^(SH|SZ)\d{6}$", code):
+            return "CN"
+        if re.match(r"^\d{5}$", code) or code.startswith("HK"):
+            return "HK"
+        return "US"
+
+    @classmethod
+    def _is_resolve_cache_valid(cls) -> bool:
+        if cls._resolve_cached_at is None:
+            return False
+        return (datetime.now() - cls._resolve_cached_at).total_seconds() <= cls._RESOLVE_CACHE_TTL_SECONDS
+
+    @classmethod
+    def _cache_name_index(cls, index: Dict[str, str]) -> None:
+        with cls._resolve_cache_lock:
+            cls._resolve_name_index = index
+            cls._resolve_cached_at = datetime.now()
+
+    @classmethod
+    def _get_cached_name_index(cls) -> Optional[Dict[str, str]]:
+        with cls._resolve_cache_lock:
+            if cls._is_resolve_cache_valid():
+                return dict(cls._resolve_name_index)
+        return None
+
+    def _build_name_index(self) -> Dict[str, str]:
+        cached = self._get_cached_name_index()
+        if cached is not None:
+            return cached
+
+        index: Dict[str, str] = {}
+        try:
+            from src.analyzer import STOCK_NAME_MAP
+
+            for code, name in (STOCK_NAME_MAP or {}).items():
+                c = str(code or "").strip().upper()
+                n = str(name or "").strip()
+                if c and n and n != c:
+                    index[c] = n
+        except Exception:
+            pass
+
+        try:
+            from data_provider.base import DataFetcherManager
+
+            manager = DataFetcherManager()
+            for fetcher in getattr(manager, "_fetchers", []):
+                if not hasattr(fetcher, "get_stock_list"):
+                    continue
+                try:
+                    df = fetcher.get_stock_list()
+                    if df is None or df.empty:
+                        continue
+
+                    for _, row in df.iterrows():
+                        code = str(
+                            row.get("code")
+                            or row.get("代码")
+                            or row.get("symbol")
+                            or ""
+                        ).strip().upper()
+                        name = str(
+                            row.get("name")
+                            or row.get("名称")
+                            or row.get("股票名称")
+                            or ""
+                        ).strip()
+                        if code and name and name != code:
+                            index[code] = name
+                    if len(index) >= 3000:
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        self._cache_name_index(index)
+        return index
+
+    def resolve_stock_query(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
+        q = (query or "").strip()
+        if not q:
+            return []
+
+        normalized_q = q.upper()
+        candidates: List[Dict[str, Any]] = []
+
+        # 1) direct code hit
+        if re.match(r"^\d{5,6}$", normalized_q) or re.match(r"^[A-Z]{1,6}(\.[A-Z]{1,2})?$", normalized_q):
+            try:
+                from data_provider.base import DataFetcherManager, canonical_stock_code
+
+                code = canonical_stock_code(normalized_q)
+                manager = DataFetcherManager()
+                name = manager.get_stock_name(code) or self._build_name_index().get(code)
+                candidates.append(
+                    {
+                        "stock_code": code,
+                        "stock_name": name or code,
+                        "market": self._detect_market(code),
+                        "score": 100,
+                    }
+                )
+                return candidates[:limit]
+            except Exception:
+                pass
+
+        # 2) fuzzy name/code match from local index
+        index = self._build_name_index()
+        q_lower = q.lower()
+        for code, name in index.items():
+            score = 0
+            name_lower = name.lower()
+            if name == q:
+                score = 100
+            elif name.startswith(q):
+                score = 92
+            elif q in name:
+                score = 82
+            elif code == normalized_q:
+                score = 96
+            elif code.startswith(normalized_q):
+                score = 75
+            if score <= 0:
+                continue
+            candidates.append(
+                {
+                    "stock_code": code,
+                    "stock_name": name,
+                    "market": self._detect_market(code),
+                    "score": score,
+                }
+            )
+
+        # 3) ensure deterministic order
+        candidates.sort(key=lambda x: (-int(x.get("score") or 0), str(x.get("stock_code") or "")))
+        seen = set()
+        dedup: List[Dict[str, Any]] = []
+        for item in candidates:
+            code = item["stock_code"]
+            if code in seen:
+                continue
+            seen.add(code)
+            dedup.append(item)
+            if len(dedup) >= limit:
+                break
+        return dedup
 
     @classmethod
     def _record_fetch_result(cls, stock_code: str, success: bool) -> int:
