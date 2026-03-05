@@ -498,7 +498,7 @@ portfolio_review_tool = ToolDefinition(
         ),
     ],
     handler=_handle_portfolio_review,
-    category="analysis",
+    category="data",
 )
 
 

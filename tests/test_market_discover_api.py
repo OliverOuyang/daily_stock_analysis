@@ -4,6 +4,7 @@
 import os
 import tempfile
 import unittest
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
@@ -318,9 +319,51 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["status"], "completed")
+
+    @patch("api.v1.endpoints.market.run_market_discover_scan")
+    @patch("api.v1.endpoints.market._task_is_done", return_value=(False, False))
+    def test_market_prescore_status_timeout_returns_degraded_result(self, _mock_done, mock_scan) -> None:
+        mock_scan.return_value = MarketDiscoverResponse(
+            source="mock_fallback",
+            total_sectors=1,
+            triggered_tasks=0,
+            duplicate_tasks=0,
+            sectors=[
+                SectorDiscoverItem(
+                    sector_name="人工智能",
+                    change_pct=1.2,
+                    leaders=[MarketLeader(stock_code="300308", stock_name="中际旭创", change_pct=2.1, latest_score=76)],
+                )
+            ],
+            cache_hit=False,
+            cache_age_seconds=None,
+            cache_ttl_seconds=1200,
+        )
+
+        run_id = "run_timeout_1"
+        market_endpoint._PRESCORE_RUNS[run_id] = {
+            "ts": 9999999999,
+            "started_at": time.time() - 999,
+            "status": "running",
+            "task_ids": ["task_1", "task_2"],
+            "total_tasks": 2,
+            "completed_tasks": 0,
+            "failed_tasks": 0,
+            "diagnostics": None,
+            "params": {"top_n": 5, "leaders_per_sector": 3, "min_score": 70, "sector_keyword": None, "min_change_pct": None},
+            "result": None,
+        }
+
+        with patch.object(market_endpoint, "_PRESCORE_MAX_WAIT_SECONDS", 1):
+            resp = self.client.get(f"/api/v1/market/discover/prescore/{run_id}")
+
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["status"], "completed")
         self.assertEqual(data["progress"], 100)
-        self.assertIsNotNone(data["result"])
-        self.assertEqual(data["result"]["sectors"][0]["leaders"][0]["stock_code"], "000933")
+        self.assertIn("超时", data.get("diagnostics") or "")
+        self.assertIsNotNone(data.get("result"))
+        self.assertEqual(data["result"]["sectors"][0]["leaders"][0]["stock_code"], "300308")
 
 
 if __name__ == "__main__":

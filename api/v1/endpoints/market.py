@@ -44,6 +44,7 @@ _CACHE_LOCK = threading.Lock()
 _DISCOVER_CACHE: Dict[Tuple[int, int, Optional[int], str, Optional[float]], Dict[str, Any]] = {}
 _PRESCORE_LOCK = threading.Lock()
 _PRESCORE_TTL_SECONDS = int(os.getenv("MARKET_PRESCORE_TTL_SECONDS", "3600"))
+_PRESCORE_MAX_WAIT_SECONDS = int(os.getenv("MARKET_PRESCORE_MAX_WAIT_SECONDS", "180"))
 _PRESCORE_RUNS: Dict[str, Dict[str, Any]] = {}
 
 
@@ -626,6 +627,7 @@ def start_market_prescore(
         with _PRESCORE_LOCK:
             _PRESCORE_RUNS[run_id] = {
                 "ts": time.time(),
+                "started_at": time.time(),
                 "status": status,
                 "task_ids": task_ids,
                 "total_tasks": len(task_ids),
@@ -672,6 +674,7 @@ def get_market_prescore_status(run_id: str) -> MarketPrescoreStatusResponse:
     failed_tasks = int(run.get("failed_tasks") or 0)
     diagnostics = run.get("diagnostics")
     result = run.get("result")
+    started_at = float(run.get("started_at") or run.get("ts") or time.time())
 
     if status in ("running", "pending"):
         done = 0
@@ -684,7 +687,40 @@ def get_market_prescore_status(run_id: str) -> MarketPrescoreStatusResponse:
                 failed += 1
         completed_tasks = done
         failed_tasks = failed
-        if total_tasks == 0 or done >= total_tasks:
+        elapsed = max(0.0, time.time() - started_at)
+        timed_out = elapsed >= float(_PRESCORE_MAX_WAIT_SECONDS)
+
+        if timed_out and total_tasks > 0 and done < total_tasks:
+            logger.warning(
+                "prescore run timed out: run_id=%s elapsed=%.1fs done=%s/%s",
+                run_id,
+                elapsed,
+                done,
+                total_tasks,
+            )
+            status = "completed"
+            if diagnostics:
+                diagnostics = f"{diagnostics}; 预评分超时({int(elapsed)}s)，已返回降级聚合结果"
+            else:
+                diagnostics = f"预评分超时({int(elapsed)}s)，已返回降级聚合结果"
+            completed_tasks = total_tasks
+
+            try:
+                params = run.get("params", {})
+                result = run_market_discover_scan(
+                    top_n=int(params.get("top_n", 5)),
+                    leaders_per_sector=int(params.get("leaders_per_sector", 3)),
+                    trigger_analysis=False,
+                    use_cache=False,
+                    min_score=params.get("min_score"),
+                    sector_keyword=params.get("sector_keyword"),
+                    min_change_pct=params.get("min_change_pct"),
+                )
+            except Exception as e:
+                diagnostics = f"{diagnostics}; 降级聚合失败: {e}"
+                result = None
+
+        if (not timed_out) and (total_tasks == 0 or done >= total_tasks):
             status = "completed"
             try:
                 params = run.get("params", {})
