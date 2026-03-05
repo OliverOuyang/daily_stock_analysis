@@ -47,6 +47,9 @@ export interface ReportPositionActions {
   basis?: string;
   confidence?: number;
   missingReason?: string;
+  extractionSource?: 'structured_json' | 'text_rule' | 'default_fallback';
+  isFallback?: boolean;
+  completeness?: 'complete' | 'partial' | 'defaulted';
 }
 
 /** 策略点位区 */
