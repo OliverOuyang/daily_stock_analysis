@@ -2,6 +2,7 @@ import type React from 'react';
 import { useState, useEffect } from 'react';
 import type { MarketDiscoverResponse, SectorDiscoverItem } from '../../types/market';
 import { marketApi } from '../../api/market';
+import { analysisApi } from '../../api/analysis';
 import { portfolioApi } from '../../api/portfolio';
 
 interface MarketDiscoverPanelProps {
@@ -19,13 +20,26 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [minScore, setMinScore] = useState(70);
+  const [sectorKeyword, setSectorKeyword] = useState('');
+  const [minChangePct, setMinChangePct] = useState('');
   const [toast, setToast] = useState<string | null>(null);
+  const [isPrescoreRunning, setIsPrescoreRunning] = useState(false);
+  const [prescoreProgress, setPrescoreProgress] = useState('');
+  const parsedMinChangePct = (() => {
+    const n = Number(minChangePct);
+    return Number.isFinite(n) ? n : undefined;
+  })();
 
   const fetchDiscovery = async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await marketApi.discover({ triggerAnalysis: false, minScore });
+      const res = await marketApi.discover({
+        triggerAnalysis: false,
+        minScore,
+        sectorKeyword: sectorKeyword.trim() || undefined,
+        minChangePct: minChangePct.trim() === '' ? undefined : parsedMinChangePct,
+      });
       setData(res);
     } catch (err) {
       setError('获取市场发现数据失败');
@@ -39,7 +53,7 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
     // eslint-disable-next-line @typescript-eslint/no-floating-promises
     fetchDiscovery();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [minScore]);
+  }, [minScore, sectorKeyword, minChangePct]);
 
   const addToWatchlist = async (code: string, name?: string) => {
     try {
@@ -59,6 +73,53 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
     }
   };
 
+  const runPrescoreScan = async () => {
+    setIsPrescoreRunning(true);
+    setPrescoreProgress('触发预评分任务...');
+    try {
+      const start = await marketApi.discover({
+        triggerAnalysis: true,
+        minScore: 0, // 预评分阶段先不按分数过滤，尽量覆盖候选
+        sectorKeyword: sectorKeyword.trim() || undefined,
+        minChangePct: minChangePct.trim() === '' ? undefined : parsedMinChangePct,
+      });
+
+      const taskIds = (start.sectors || [])
+        .flatMap((s) => s.leaders || [])
+        .map((l) => l.taskId)
+        .filter((id): id is string => Boolean(id));
+
+      if (taskIds.length === 0) {
+        setPrescoreProgress('未触发新任务，正在刷新...');
+        await fetchDiscovery();
+        setToast('预评分完成（无新增任务）');
+        setTimeout(() => setToast(null), 1800);
+        return;
+      }
+
+      const deadline = Date.now() + 60_000;
+      let done = 0;
+      while (Date.now() < deadline && done < taskIds.length) {
+        const statuses = await Promise.allSettled(taskIds.map((id) => analysisApi.getStatus(id)));
+        done = statuses.filter((s) => s.status === 'fulfilled' && (s.value.status === 'completed' || s.value.status === 'failed')).length;
+        setPrescoreProgress(`预评分进行中 ${done}/${taskIds.length}`);
+        if (done >= taskIds.length) break;
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+      setPrescoreProgress('预评分完成，刷新筛选结果...');
+      await fetchDiscovery();
+      setToast('预评分扫描完成');
+      setTimeout(() => setToast(null), 1800);
+    } catch (e) {
+      setToast('预评分扫描失败');
+      setTimeout(() => setToast(null), 1800);
+      console.error(e);
+    } finally {
+      setIsPrescoreRunning(false);
+      setTimeout(() => setPrescoreProgress(''), 1200);
+    }
+  };
+
   return (
     <div className="glass-card flex flex-col overflow-hidden border-cyan/10 shadow-lg shadow-cyan/5">
       <div className="p-3 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
@@ -69,9 +130,9 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
           </span>
           今日市场异动
         </h2>
-        <button 
+        <button
           onClick={fetchDiscovery}
-          disabled={isLoading}
+          disabled={isLoading || isPrescoreRunning}
           className="text-[10px] text-muted hover:text-cyan transition-colors flex items-center gap-1"
         >
           {isLoading ? (
@@ -97,6 +158,30 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
           onChange={(e) => setMinScore(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
           className="input-terminal py-0.5 px-2 w-16 text-[11px]"
         />
+      </div>
+      <div className="px-3 py-2 border-b border-white/5 bg-black/10 grid grid-cols-2 gap-2">
+        <input
+          value={sectorKeyword}
+          onChange={(e) => setSectorKeyword(e.target.value)}
+          placeholder="板块关键词"
+          className="input-terminal py-0.5 px-2 text-[11px]"
+        />
+        <input
+          value={minChangePct}
+          onChange={(e) => setMinChangePct(e.target.value)}
+          placeholder="最小涨跌幅(%)"
+          className="input-terminal py-0.5 px-2 text-[11px]"
+        />
+      </div>
+      <div className="px-3 py-2 border-b border-white/5 bg-black/10 flex items-center justify-between gap-2">
+        <button
+          onClick={() => void runPrescoreScan()}
+          disabled={isPrescoreRunning || isLoading}
+          className="text-[10px] px-2 py-1 rounded border border-cyan/30 text-cyan hover:bg-cyan/10 disabled:opacity-60"
+        >
+          {isPrescoreRunning ? '预评分中...' : '预评分扫描'}
+        </button>
+        {prescoreProgress && <span className="text-[10px] text-muted">{prescoreProgress}</span>}
       </div>
       {toast && <div className="px-3 py-1 text-[10px] text-cyan bg-cyan/10 border-b border-cyan/20">{toast}</div>}
 

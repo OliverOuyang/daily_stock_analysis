@@ -15,6 +15,18 @@
   - `./venv/bin/pytest -q tests/test_stocks_resolve_api.py tests/test_portfolio_api.py tests/test_market_discover_api.py` 通过。
   - `apps/dsa-web npm run build` 通过。
 
+## 2026-03-05 市场异动筛选增强（阶段中）
+- 后端 `GET /api/v1/market/discover` 新增筛选参数：
+  - `sector_keyword`
+  - `min_change_pct`
+- 前端市场异动面板新增：
+  - 板块关键词输入
+  - 最小涨跌幅输入
+  - “预评分扫描”按钮（触发 simple 分析并轮询任务状态，完成后刷新）
+- 验证结果：
+  - `./venv/bin/pytest -q tests/test_market_discover_api.py tests/test_stocks_resolve_api.py` 通过。
+  - `apps/dsa-web npm run build` 通过。
+
 ## Debug 模板
 - 问题：
 - 复现步骤：

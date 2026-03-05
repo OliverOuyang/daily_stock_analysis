@@ -126,8 +126,14 @@ def _build_mock_hot_sectors(top_n: int, leaders_per_sector: int) -> List[Dict[st
     return sectors
 
 
-def _cache_key(top_n: int, leaders_per_sector: int, min_score: Optional[int]) -> Tuple[int, int, Optional[int]]:
-    return top_n, leaders_per_sector, min_score
+def _cache_key(
+    top_n: int,
+    leaders_per_sector: int,
+    min_score: Optional[int],
+    sector_keyword: Optional[str],
+    min_change_pct: Optional[float],
+) -> Tuple[int, int, Optional[int], str, Optional[float]]:
+    return top_n, leaders_per_sector, min_score, (sector_keyword or "").strip().lower(), min_change_pct
 
 
 def _get_cached_discover_result(key: Tuple[int, int, Optional[int]], ttl_seconds: int) -> Optional[Dict[str, Any]]:
@@ -354,9 +360,11 @@ def run_market_discover_scan(
     trigger_analysis: bool,
     use_cache: bool = True,
     min_score: Optional[int] = None,
+    sector_keyword: Optional[str] = None,
+    min_change_pct: Optional[float] = None,
 ) -> MarketDiscoverResponse:
     """Core discover+trigger logic for API and scheduler reuse."""
-    cache_key = _cache_key(top_n, leaders_per_sector, min_score)
+    cache_key = _cache_key(top_n, leaders_per_sector, min_score, sector_keyword, min_change_pct)
     source = "akshare_em"
     sectors_raw: List[Dict[str, Any]] = []
     analysis_triggered_on_cache = False
@@ -389,6 +397,17 @@ def run_market_discover_scan(
             sectors_raw = _build_mock_hot_sectors(top_n=top_n, leaders_per_sector=leaders_per_sector)
         if use_cache:
             _set_cached_discover_result(cache_key, source, sectors_raw, analysis_triggered=False)
+
+    # Optional sector filters.
+    if sector_keyword:
+        kw = sector_keyword.strip().lower()
+        if kw:
+            sectors_raw = [sec for sec in sectors_raw if kw in str(sec.get("sector_name", "")).lower()]
+    if min_change_pct is not None:
+        sectors_raw = [
+            sec for sec in sectors_raw
+            if (sec.get("change_pct") is not None and float(sec.get("change_pct")) >= float(min_change_pct))
+        ]
 
     # Optional high-score filter from latest analysis history.
     if min_score is not None:
@@ -489,6 +508,8 @@ def discover_market(
     leaders_per_sector: int = Query(2, ge=1, le=10, description="每个行业的龙头数量"),
     trigger_analysis: bool = Query(True, description="是否自动触发 simple 分析"),
     min_score: Optional[int] = Query(70, ge=0, le=100, description="最低历史评分过滤阈值"),
+    sector_keyword: Optional[str] = Query(None, description="板块关键词过滤"),
+    min_change_pct: Optional[float] = Query(None, description="板块最小涨跌幅过滤"),
 ) -> MarketDiscoverResponse:
     try:
         return run_market_discover_scan(
@@ -497,6 +518,8 @@ def discover_market(
             trigger_analysis=trigger_analysis,
             use_cache=True,
             min_score=min_score,
+            sector_keyword=sector_keyword,
+            min_change_pct=min_change_pct,
         )
     except HTTPException:
         raise
