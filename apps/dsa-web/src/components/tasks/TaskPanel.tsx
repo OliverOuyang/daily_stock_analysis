@@ -63,11 +63,9 @@ const TaskItem: React.FC<TaskItemProps> = ({ task }) => {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-white truncate">
-            {hasDisplayName ? task.stockName : '股票'}
+            {hasDisplayName ? task.stockName : task.stockCode}
           </span>
-          <span className="text-xs text-muted">
-            {task.stockCode}
-          </span>
+          {hasDisplayName && <span className="text-xs text-muted">{task.stockCode}</span>}
         </div>
         <p className="text-xs text-secondary truncate mt-0.5">{stageText}</p>
       </div>

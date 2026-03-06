@@ -78,6 +78,13 @@ def _resolve_stock_name_for_task(stock_code: str) -> Optional[str]:
             latest_name = str(getattr(records[0], "name", "") or "").strip()
             if latest_name:
                 return latest_name
+
+        # 最后兜底：从数据源实时解析名称（如 ETF、首次分析股票）
+        from data_provider.base import DataFetcherManager
+        manager = DataFetcherManager()
+        fetched_name = str(manager.get_stock_name(stock_code) or "").strip()
+        if fetched_name:
+            return fetched_name
     except Exception:
         logger.debug("resolve stock name for task failed: %s", stock_code, exc_info=True)
     return None
