@@ -39,6 +39,7 @@ router = APIRouter()
 
 # Cache TTL defaults to 20 minutes.
 _MARKET_DISCOVER_CACHE_TTL_SECONDS = int(os.getenv("MARKET_DISCOVER_CACHE_TTL_SECONDS", "1200"))
+_MARKET_DISCOVER_MOCK_CACHE_TTL_SECONDS = int(os.getenv("MARKET_DISCOVER_MOCK_CACHE_TTL_SECONDS", "90"))
 _MIN_MARKET_CAP_BILLION = float(os.getenv("MARKET_DISCOVER_MIN_MARKET_CAP_BILLION", "30"))
 _CACHE_LOCK = threading.Lock()
 _DISCOVER_CACHE: Dict[Tuple[int, int, Optional[int], str, Optional[float]], Dict[str, Any]] = {}
@@ -157,7 +158,8 @@ def _get_cached_discover_result(
         if not item:
             return None
         age_seconds = int(now - item["ts"])
-        if age_seconds > ttl_seconds:
+        item_ttl = int(item.get("ttl_seconds", ttl_seconds))
+        if age_seconds > item_ttl:
             _DISCOVER_CACHE.pop(key, None)
             return None
         # Return shallow copy to avoid accidental mutation.
@@ -174,6 +176,7 @@ def _set_cached_discover_result(
     source: str,
     sectors: List[Dict[str, Any]],
     analysis_triggered: bool = False,
+    ttl_seconds: Optional[int] = None,
 ) -> None:
     with _CACHE_LOCK:
         _DISCOVER_CACHE[key] = {
@@ -181,6 +184,7 @@ def _set_cached_discover_result(
             "source": source,
             "sectors": [dict(x) for x in sectors],
             "analysis_triggered": analysis_triggered,
+            "ttl_seconds": int(ttl_seconds) if ttl_seconds is not None else _MARKET_DISCOVER_CACHE_TTL_SECONDS,
         }
 
 
@@ -450,7 +454,18 @@ def run_market_discover_scan(
             source = "mock_fallback"
             sectors_raw = _build_mock_hot_sectors(top_n=top_n, leaders_per_sector=leaders_per_sector)
         if use_cache:
-            _set_cached_discover_result(cache_key, source, sectors_raw, analysis_triggered=False)
+            ttl_seconds = (
+                _MARKET_DISCOVER_MOCK_CACHE_TTL_SECONDS
+                if source == "mock_fallback"
+                else _MARKET_DISCOVER_CACHE_TTL_SECONDS
+            )
+            _set_cached_discover_result(
+                cache_key,
+                source,
+                sectors_raw,
+                analysis_triggered=False,
+                ttl_seconds=ttl_seconds,
+            )
 
     # Optional sector filters.
     if sector_keyword:
@@ -564,13 +579,14 @@ def discover_market(
     min_score: Optional[int] = Query(70, ge=0, le=100, description="最低历史评分过滤阈值"),
     sector_keyword: Optional[str] = Query(None, description="板块关键词过滤"),
     min_change_pct: Optional[float] = Query(None, description="板块最小涨跌幅过滤"),
+    force_refresh: bool = Query(False, description="是否强制绕过缓存刷新"),
 ) -> MarketDiscoverResponse:
     try:
         return run_market_discover_scan(
             top_n=top_n,
             leaders_per_sector=leaders_per_sector,
             trigger_analysis=trigger_analysis,
-            use_cache=True,
+            use_cache=not force_refresh,
             min_score=min_score,
             sector_keyword=sector_keyword,
             min_change_pct=min_change_pct,

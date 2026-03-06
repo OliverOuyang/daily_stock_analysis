@@ -14,6 +14,7 @@ export const marketApi = {
     minScore?: number;
     sectorKeyword?: string;
     minChangePct?: number;
+    forceRefresh?: boolean;
   }): Promise<MarketDiscoverResponse> => {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/market/discover', {
       params: {
@@ -23,6 +24,7 @@ export const marketApi = {
         min_score: params?.minScore ?? 70,
         sector_keyword: params?.sectorKeyword,
         min_change_pct: params?.minChangePct,
+        force_refresh: params?.forceRefresh ?? false,
       },
     });
     return toCamelCase<MarketDiscoverResponse>(response.data);

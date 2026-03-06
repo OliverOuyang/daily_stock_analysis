@@ -35,7 +35,7 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
     return Number.isFinite(n) ? n : undefined;
   })();
 
-  const fetchDiscovery = async () => {
+  const fetchDiscovery = async (forceRefresh = false) => {
     setIsLoading(true);
     setError(null);
     try {
@@ -44,6 +44,7 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
         minScore: debouncedMinScore,
         sectorKeyword: debouncedSectorKeyword.trim() || undefined,
         minChangePct: debouncedMinChangePct.trim() === '' ? undefined : parsedMinChangePct,
+        forceRefresh,
       });
       setData(res);
     } catch (err) {
@@ -56,7 +57,7 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
 
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    fetchDiscovery();
+    fetchDiscovery(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedMinScore, debouncedSectorKeyword, debouncedMinChangePct]);
 
@@ -108,7 +109,7 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
         await new Promise((r) => setTimeout(r, 2500));
       }
       setPrescoreProgress('预评分完成');
-      if (!hasResult) await fetchDiscovery();
+      if (!hasResult) await fetchDiscovery(true);
       setToast(finalDiagnostics || '预评分扫描完成');
       setTimeout(() => setToast(null), 1800);
     } catch (e) {
@@ -132,7 +133,7 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
           今日市场异动
         </h2>
         <button
-          onClick={fetchDiscovery}
+          onClick={() => void fetchDiscovery(true)}
           disabled={isLoading || isPrescoreRunning}
           className="text-[10px] text-muted hover:text-cyan transition-colors flex items-center gap-1"
         >
@@ -190,7 +191,7 @@ export const MarketDiscoverPanel: React.FC<MarketDiscoverPanelProps> = ({
         {error ? (
           <div className="py-6 text-center">
             <p className="text-[11px] text-rose-400 mb-2">{error}</p>
-            <button onClick={fetchDiscovery} className="text-[10px] px-2 py-1 rounded bg-white/5 border border-white/10 text-muted">重试</button>
+            <button onClick={() => void fetchDiscovery(true)} className="text-[10px] px-2 py-1 rounded bg-white/5 border border-white/10 text-muted">重试</button>
           </div>
         ) : isLoading && !data ? (
           <div className="py-12 flex flex-col items-center justify-center gap-3">

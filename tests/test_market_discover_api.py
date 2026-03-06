@@ -152,6 +152,32 @@ class MarketDiscoverApiTestCase(unittest.TestCase):
 
     @patch("api.v1.endpoints.market.get_task_queue")
     @patch("api.v1.endpoints.market._discover_hot_sectors")
+    def test_market_discover_force_refresh_bypasses_cache(self, mock_discover, mock_get_queue) -> None:
+        mock_discover.return_value = (
+            "akshare",
+            [
+                {
+                    "sector_name": "人工智能",
+                    "change_pct": 1.1,
+                    "leaders": [
+                        {"stock_code": "300308", "stock_name": "中际旭创", "change_pct": 2.2},
+                    ],
+                }
+            ],
+        )
+        mock_get_queue.return_value = _FakeTaskQueue()
+
+        first = self.client.get("/api/v1/market/discover?trigger_analysis=false")
+        self.assertEqual(first.status_code, 200)
+        self.assertFalse(first.json()["cache_hit"])
+
+        second = self.client.get("/api/v1/market/discover?trigger_analysis=false&force_refresh=true")
+        self.assertEqual(second.status_code, 200)
+        self.assertFalse(second.json()["cache_hit"])
+        self.assertEqual(mock_discover.call_count, 2)
+
+    @patch("api.v1.endpoints.market.get_task_queue")
+    @patch("api.v1.endpoints.market._discover_hot_sectors")
     def test_market_discover_fallback_to_mock_when_upstream_empty(self, mock_discover, mock_get_queue) -> None:
         mock_discover.return_value = ("akshare", [])
         mock_get_queue.return_value = _FakeTaskQueue()
