@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { HistoryItem, AnalysisReport, TaskInfo } from '../types/analysis';
 import type { PortfolioProfile, PortfolioReviewResult, PortfolioStatus } from '../types/portfolio';
@@ -35,6 +35,7 @@ const HomePage: React.FC = () => {
   const [isLoadingReport, setIsLoadingReport] = useState(false);
 
   const [activeTasks, setActiveTasks] = useState<TaskInfo[]>([]);
+  const [taskToast, setTaskToast] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [batchSize] = useState(3);
   const [batchDelayMs] = useState(600);
@@ -74,17 +75,43 @@ const HomePage: React.FC = () => {
 
   const analysisRequestIdRef = useRef<number>(0);
 
+  const taskNameMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of profiles) {
+      if (p.stockName && p.stockName !== p.stockCode) map[p.stockCode] = p.stockName;
+    }
+    for (const h of historyItems) {
+      if (h.stockName && h.stockName !== h.stockCode) map[h.stockCode] = h.stockName;
+    }
+    if (selectedReport?.meta?.stockName && selectedReport.meta.stockName !== selectedReport.meta.stockCode) {
+      map[selectedReport.meta.stockCode] = selectedReport.meta.stockName;
+    }
+    for (const [code, quote] of Object.entries(watchlistQuotes)) {
+      if (quote.stockName && quote.stockName !== code) map[code] = quote.stockName;
+    }
+    return map;
+  }, [historyItems, profiles, selectedReport, watchlistQuotes]);
+
+  const enrichTask = useCallback((task: TaskInfo): TaskInfo => {
+    const fallbackName = taskNameMap[task.stockCode];
+    if (!task.stockName && fallbackName) {
+      return { ...task, stockName: fallbackName };
+    }
+    return task;
+  }, [taskNameMap]);
+
   const updateTask = useCallback((updatedTask: TaskInfo) => {
     setActiveTasks((prev) => {
       const index = prev.findIndex((t) => t.taskId === updatedTask.taskId);
+      const enriched = enrichTask(updatedTask);
       if (index >= 0) {
         const newTasks = [...prev];
-        newTasks[index] = updatedTask;
+        newTasks[index] = { ...newTasks[index], ...enriched };
         return newTasks;
       }
-      return prev;
+      return [...prev, enriched];
     });
-  }, []);
+  }, [enrichTask]);
 
   const removeTask = useCallback((taskId: string) => {
     setActiveTasks((prev) => prev.filter((t) => t.taskId !== taskId));
@@ -93,18 +120,27 @@ const HomePage: React.FC = () => {
   useTaskStream({
     onTaskCreated: (task) => {
       setActiveTasks((prev) => {
-        if (prev.some((t) => t.taskId === task.taskId)) return prev;
-        return [...prev, task];
+        const enriched = enrichTask(task);
+        if (prev.some((t) => t.taskId === task.taskId)) {
+          return prev.map((t) => (t.taskId === task.taskId ? { ...t, ...enriched } : t));
+        }
+        return [...prev, enriched];
       });
     },
     onTaskStarted: updateTask,
-    onTaskCompleted: () => {
-      fetchHistory();
-      setTimeout(() => removeTask(''), 2000); 
+    onTaskCompleted: (task) => {
+      const enriched = enrichTask(task);
+      updateTask(enriched);
+      void fetchHistory(false, true, true);
+      const display = `${enriched.stockName && enriched.stockName !== enriched.stockCode ? `${enriched.stockName} (${enriched.stockCode})` : enriched.stockCode} 分析完成`;
+      setTaskToast(display);
+      setTimeout(() => setTaskToast(null), 2200);
+      setTimeout(() => removeTask(enriched.taskId), 1200);
     },
     onTaskFailed: (task) => {
-      updateTask(task);
-      setStoreError(task.error || '分析失败');
+      const enriched = enrichTask(task);
+      updateTask(enriched);
+      setStoreError(enriched.error || '分析失败');
     },
     enabled: true,
   });
@@ -286,11 +322,23 @@ const HomePage: React.FC = () => {
       const delayMs = clampBatchDelayMs(batchDelayMs);
       for (let i = 0; i < codes.length; i += size) {
         const chunk = codes.slice(i, i + size);
-        await Promise.allSettled(chunk.map((code) => analysisApi.analyzeAsync({ stockCode: code, reportType: 'detailed' })));
+        await Promise.allSettled(chunk.map(async (code) => {
+          const accepted = await analysisApi.analyzeAsync({ stockCode: code, reportType: 'detailed' });
+          updateTask(enrichTask({
+            taskId: accepted.taskId,
+            stockCode: code,
+            stockName: taskNameMap[code],
+            status: accepted.status === 'pending' ? 'pending' : 'processing',
+            progress: accepted.status === 'pending' ? 0 : 10,
+            message: accepted.message || (accepted.status === 'pending' ? '任务已加入队列' : '正在分析中'),
+            reportType: 'detailed',
+            createdAt: new Date().toISOString(),
+          }));
+        }));
         if (i + size < codes.length) await new Promise((r) => setTimeout(r, delayMs));
       }
     } catch (err) { setStoreError('分析失败'); } finally { setIsAnalyzing(false); setLoading(false); }
-  }, [batchDelayMs, batchSize, setLoading, setStoreError]);
+  }, [batchDelayMs, batchSize, enrichTask, setLoading, setStoreError, taskNameMap, updateTask]);
 
   const resolveInputToCodes = useCallback(async (rawInput: string): Promise<{
     codes?: string[];
@@ -461,6 +509,11 @@ const HomePage: React.FC = () => {
           )}
           <div className="text-[10px] text-muted font-mono">build: e7559e1</div>
           {inputError && <p className="text-[11px] text-rose-400">{inputError}</p>}
+          {taskToast && (
+            <div className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded px-2 py-1 w-fit">
+              {taskToast}
+            </div>
+          )}
 
           <div className="glass-card p-2 border-white/5 grid grid-cols-1 xl:grid-cols-12 gap-3 items-start">
             <div className="xl:col-span-4 space-y-2">

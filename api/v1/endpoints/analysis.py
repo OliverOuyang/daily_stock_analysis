@@ -59,6 +59,28 @@ router = APIRouter()
 def _to_float_or_none(v: Any) -> Optional[float]:
     if v is None:
         return None
+
+
+def _resolve_stock_name_for_task(stock_code: str) -> Optional[str]:
+    """尽量在任务创建时补齐股票名称，提升任务面板可读性。"""
+    try:
+        from src.storage import DatabaseManager
+        db = DatabaseManager.get_instance()
+
+        profile = db.get_portfolio_profile(stock_code)
+        if isinstance(profile, dict):
+            profile_name = str(profile.get("stock_name") or "").strip()
+            if profile_name:
+                return profile_name
+
+        records = db.get_analysis_history(code=stock_code, days=3650, limit=1)
+        if records:
+            latest_name = str(getattr(records[0], "name", "") or "").strip()
+            if latest_name:
+                return latest_name
+    except Exception:
+        logger.debug("resolve stock name for task failed: %s", stock_code, exc_info=True)
+    return None
     if isinstance(v, (int, float)):
         return float(v)
     try:
@@ -159,7 +181,7 @@ def _handle_async_analysis(
         # 提交任务（如果重复会抛出 DuplicateTaskError）
         task_info = task_queue.submit_task(
             stock_code=stock_code,
-            stock_name=None,  # 名称在分析过程中获取
+            stock_name=_resolve_stock_name_for_task(stock_code),
             report_type=request.report_type,
             force_refresh=request.force_refresh,
         )

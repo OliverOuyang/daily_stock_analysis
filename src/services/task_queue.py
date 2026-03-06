@@ -348,10 +348,9 @@ class AnalysisTaskQueue:
                 return None
             task.status = TaskStatus.PROCESSING
             task.started_at = datetime.now()
-            task.message = "正在分析中..."
-            task.progress = 10
-        
-        self._broadcast_event("task_started", task.to_dict())
+        self._update_task_progress(task_id, 10, "排队完成，准备拉取行情与交易档案")
+        self._update_task_progress(task_id, 30, "正在加载历史分析与持仓上下文")
+        self._update_task_progress(task_id, 65, "AI 正在推理交易策略，请稍候")
         
         try:
             # 导入分析服务（延迟导入避免循环依赖）
@@ -365,6 +364,7 @@ class AnalysisTaskQueue:
                 force_refresh=force_refresh,
                 query_id=task_id,
             )
+            self._update_task_progress(task_id, 90, "正在整理分析结果并写入历史")
             
             if result:
                 # 更新任务状态为完成
@@ -415,6 +415,24 @@ class AnalysisTaskQueue:
             self._cleanup_old_tasks()
             
             return None
+
+    def _update_task_progress(self, task_id: str, progress: int, message: str) -> None:
+        """
+        更新任务进度并广播（复用 task_started 事件给前端实时刷新）。
+
+        Args:
+            task_id: 任务 ID
+            progress: 进度（0~100）
+            message: 阶段描述
+        """
+        with self._data_lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return
+            task.progress = max(0, min(100, int(progress)))
+            task.message = message
+            payload = task.to_dict()
+        self._broadcast_event("task_started", payload)
     
     def _cleanup_old_tasks(self) -> int:
         """

@@ -14,6 +14,16 @@ interface TaskItemProps {
 const TaskItem: React.FC<TaskItemProps> = ({ task }) => {
   const isPending = task.status === 'pending';
   const isProcessing = task.status === 'processing';
+  const hasDisplayName = Boolean(task.stockName && task.stockName.trim() && task.stockName !== task.stockCode);
+
+  const stageText = task.message
+    || (isPending ? '任务已加入队列' : task.progress >= 90
+      ? '正在整理分析结果'
+      : task.progress >= 65
+        ? 'AI 正在推理策略'
+        : task.progress >= 30
+          ? '正在加载上下文'
+          : '排队完成，准备开始');
 
   return (
     <div className="flex items-center gap-3 px-3 py-2 bg-elevated rounded-lg border border-white/5">
@@ -53,21 +63,17 @@ const TaskItem: React.FC<TaskItemProps> = ({ task }) => {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-white truncate">
-            {task.stockName || task.stockCode}
+            {hasDisplayName ? task.stockName : '股票'}
           </span>
           <span className="text-xs text-muted">
             {task.stockCode}
           </span>
         </div>
-        {task.message && (
-          <p className="text-xs text-secondary truncate mt-0.5">
-            {task.message}
-          </p>
-        )}
+        <p className="text-xs text-secondary truncate mt-0.5">{stageText}</p>
       </div>
 
       {/* 状态标签 */}
-      <div className="flex-shrink-0">
+      <div className="flex-shrink-0 text-right">
         <span
           className={`text-xs px-1.5 py-0.5 rounded ${
             isProcessing
@@ -77,6 +83,7 @@ const TaskItem: React.FC<TaskItemProps> = ({ task }) => {
         >
           {isProcessing ? '分析中' : '等待中'}
         </span>
+        <div className="text-[10px] text-muted mt-0.5 font-mono">{Math.max(0, Math.min(100, task.progress || 0))}%</div>
       </div>
     </div>
   );
